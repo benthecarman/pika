@@ -1,0 +1,73 @@
+package com.pika.app.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import com.pika.app.AppManager
+import com.pika.app.rust.AppAction
+import com.pika.app.rust.Screen
+import com.pika.app.ui.TestTags
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+fun NewChatScreen(manager: AppManager, padding: PaddingValues) {
+    var npub by remember { mutableStateOf("") }
+
+    Scaffold(
+        modifier = Modifier.padding(padding),
+        topBar = {
+            TopAppBar(
+                title = { Text("New chat") },
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            val stack = manager.state.router.screenStack
+                            manager.dispatch(AppAction.UpdateScreenStack(stack.dropLast(1)))
+                        },
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { inner ->
+        Column(
+            modifier = Modifier.padding(inner).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedTextField(
+                value = npub,
+                onValueChange = { npub = it },
+                label = { Text("Peer npub") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag(TestTags.NEWCHAT_PEER_NPUB),
+            )
+            Button(
+                onClick = { manager.dispatch(AppAction.CreateChat(npub.trim())) },
+                modifier = Modifier.fillMaxWidth().testTag(TestTags.NEWCHAT_START),
+            ) {
+                Text("Start chat")
+            }
+        }
+    }
+}

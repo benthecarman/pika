@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensures an Android emulator/device is available.
+# - If any device is connected, do nothing.
+# - Otherwise, start the repo's AVD (pika_api35) and wait for boot.
+#
+# This is meant to mimic "flutter run"/"react-native run-android" style UX.
+
+ADB="${ADB:-adb}"
+EMULATOR="${EMULATOR:-emulator}"
+AVD_NAME="${PIKA_ANDROID_AVD_NAME:-pika_api35}"
+LOG_FILE="${PIKA_ANDROID_EMULATOR_LOG:-emulator.log}"
+
+if ! command -v "$ADB" >/dev/null 2>&1 || ! command -v "$EMULATOR" >/dev/null 2>&1; then
+  echo "error: missing adb/emulator on PATH. Run inside \`nix develop\`." >&2
+  exit 1
+fi
+
+has_device() {
+  "$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}' | head -n 1 | grep -q .
+}
+
+if has_device; then
+  echo "ok: android device already connected"
+  exit 0
+fi
+
+echo "starting android emulator: $AVD_NAME"
+
+# Ensure adb server is running.
+"$ADB" start-server >/dev/null 2>&1 || true
+
+# Start emulator in background. On macOS this should open the emulator window.
+# If you want headless, set PIKA_ANDROID_EMULATOR_ARGS="-no-window".
+EMULATOR_ARGS_DEFAULT=(
+  -avd "$AVD_NAME"
+  -no-snapshot
+  -no-audio
+  -gpu swiftshader_indirect
+)
+# bash 3.2 + `set -u`: expanding an unset/empty array via "${arr[@]}" can
+# trigger `unbound variable`. Initialize explicitly and only parse when set.
+EXTRA_ARGS=()
+if [ -n "${PIKA_ANDROID_EMULATOR_ARGS:-}" ]; then
+  # Intentionally rely on word splitting so callers can pass flags as a string.
+  # shellcheck disable=SC2206
+  EXTRA_ARGS=(${PIKA_ANDROID_EMULATOR_ARGS})
+fi
+
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+
+# bash 3.2 + `set -u` can error on expanding an empty array, even if declared.
+# Build argv and append extra args only when present.
+cmd=( "$EMULATOR" "${EMULATOR_ARGS_DEFAULT[@]}" )
+if [ "${#EXTRA_ARGS[@]}" -gt 0 ]; then
+  cmd+=( "${EXTRA_ARGS[@]}" )
+fi
+
+nohup "${cmd[@]}" >"$LOG_FILE" 2>&1 &
+sleep 1
+
+# Wait for adb to see a device and for boot to complete (bounded; no infinite hang).
+for i in $(seq 1 180); do
+  if has_device; then
+    boot="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+    if [ "$boot" = "1" ]; then
+      echo "ok: android emulator booted"
+      exit 0
+    fi
+  fi
+  sleep 1
+done
+
+echo "error: android emulator did not boot in time" >&2
+tail -n 200 "$LOG_FILE" >&2 || true
+exit 1

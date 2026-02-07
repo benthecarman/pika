@@ -1,0 +1,19 @@
+target/
+
+# Android
+android/.gradle/
+android/**/build/
+android/app/src/main/jniLibs/
+android/local.properties
+
+# iOS
+ios/.build/
+ios/build/
+ios/Frameworks/
+
+# Misc
+.android-avd/
+.android-home/
+.android-emulator-home/
+.direnv/
+emulator.log

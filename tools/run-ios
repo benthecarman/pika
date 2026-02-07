@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# One-command iOS dev loop:
+# - build iOS simulator app
+# - ensure a simulator device exists and is booted
+# - install and launch
+#
+# Requires an installed iOS Simulator runtime (Xcode -> Settings -> Platforms).
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Fail fast if iOS Simulator runtimes/devices are missing.
+udid="$(./tools/ios-sim-ensure | sed -n 's/^ok: ios simulator ready (udid=\\(.*\\))$/\\1/p')"
+if [ -z "${udid:-}" ]; then
+  echo "error: could not determine simulator udid" >&2
+  exit 1
+fi
+
+just ios-build-sim
+
+app_path="ios/build/Debug-iphonesimulator/Pika.app"
+if [ ! -d "$app_path" ]; then
+  echo "error: missing built app at $app_path" >&2
+  exit 1
+fi
+
+echo "installing app to simulator: $udid"
+./tools/simctl install "$udid" "$app_path"
+
+echo "launching com.pika.app"
+./tools/simctl launch "$udid" com.pika.app
+
+# Bring Simulator app to the foreground.
+open -a Simulator >/dev/null 2>&1 || true
+
+echo "ok: ios app launched"

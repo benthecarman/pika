@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensures there is at least one booted iOS simulator device available.
+#
+# This does NOT download iOS simulator runtimes. If no runtimes are installed, it prints
+# a clear error message and exits non-zero.
+
+DEV_DIR="$(ls -d /Applications/Xcode*.app/Contents/Developer 2>/dev/null | sort | tail -n 1 || true)"
+if [ -z "${DEV_DIR:-}" ]; then
+  echo "error: Xcode not found under /Applications" >&2
+  exit 1
+fi
+export DEVELOPER_DIR="$DEV_DIR"
+
+SIMCTL="$DEV_DIR/usr/bin/simctl"
+
+if [ -z "$("$SIMCTL" list runtimes | sed -n '2,$p' | tr -d '[:space:]')" ]; then
+  # Keep this check in one place so `just run-ios` and `just ios-ui-test`
+  # can give consistent guidance.
+  ./tools/ios-runtime-doctor >&2 || true
+  exit 1
+fi
+
+runtime_id="$("$SIMCTL" list runtimes | awk -F '[()]' '/^iOS / {print $2}' | tail -n 1)"
+if [ -z "${runtime_id:-}" ]; then
+  echo "error: Failed to determine an iOS runtime id from simctl." >&2
+  "$SIMCTL" list runtimes >&2 || true
+  exit 1
+fi
+
+device_type_id="$("$SIMCTL" list devicetypes | awk -F '[()]' '/iPhone 15/ {print $2; exit}')"
+if [ -z "${device_type_id:-}" ]; then
+  # Fallback to first iPhone device type if "iPhone 15" isn't available.
+  device_type_id="$("$SIMCTL" list devicetypes | awk -F '[()]' '/iPhone/ {print $2; exit}')"
+fi
+if [ -z "${device_type_id:-}" ]; then
+  echo "error: Failed to determine an iPhone device type id from simctl." >&2
+  "$SIMCTL" list devicetypes >&2 || true
+  exit 1
+fi
+
+device_name="Pika iPhone 15"
+udid="$("$SIMCTL" list devices | awk -v name="$device_name" '$0 ~ name {print $NF; exit}')"
+if [ -z "${udid:-}" ]; then
+  udid="$("$SIMCTL" create "$device_name" "$device_type_id" "$runtime_id" | tr -d '[:space:]')"
+  echo "created simulator: $device_name ($udid)"
+fi
+
+"$SIMCTL" boot "$udid" >/dev/null 2>&1 || true
+if "$SIMCTL" help 2>/dev/null | grep -q "bootstatus"; then
+  "$SIMCTL" bootstatus "$udid" -b >/dev/null 2>&1 || true
+fi
+
+echo "ok: ios simulator ready (udid=$udid)"

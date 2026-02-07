@@ -1,0 +1,95 @@
+mod actions;
+mod core;
+mod logging;
+mod mdk_support;
+mod state;
+mod updates;
+
+#[cfg(target_os = "android")]
+mod android_keyring;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+use flume::{Receiver, Sender};
+
+pub use actions::AppAction;
+pub use state::*;
+pub use updates::*;
+
+uniffi::setup_scaffolding!();
+
+#[uniffi::export(callback_interface)]
+pub trait AppReconciler: Send + Sync + 'static {
+    fn reconcile(&self, update: AppUpdate);
+}
+
+#[derive(uniffi::Object)]
+pub struct FfiApp {
+    core_tx: Sender<CoreMsg>,
+    update_rx: Receiver<AppUpdate>,
+    listening: AtomicBool,
+}
+
+#[uniffi::export]
+impl FfiApp {
+    #[uniffi::constructor]
+    pub fn new(data_dir: String) -> Arc<Self> {
+        logging::init_logging();
+
+        let (update_tx, update_rx) = flume::unbounded();
+        let (core_tx, core_rx) = flume::unbounded::<CoreMsg>();
+
+        // Actor loop thread (single threaded "app actor").
+        let core_tx_for_core = core_tx.clone();
+        thread::spawn(move || {
+            let mut core = crate::core::AppCore::new(update_tx, core_tx_for_core, data_dir);
+            while let Ok(msg) = core_rx.recv() {
+                core.handle_message(msg);
+            }
+        });
+
+        Arc::new(Self {
+            core_tx,
+            update_rx,
+            listening: AtomicBool::new(false),
+        })
+    }
+
+    pub fn state(&self) -> AppState {
+        let (tx, rx) = flume::bounded(1);
+        if self
+            .core_tx
+            .send(CoreMsg::Request(CoreRequest::GetState { reply: tx }))
+            .is_err()
+        {
+            return AppState::empty();
+        }
+        rx.recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap_or_else(|_| AppState::empty())
+    }
+
+    pub fn dispatch(&self, action: AppAction) {
+        // Contract: never block caller.
+        let _ = self.core_tx.send(CoreMsg::Action(action));
+    }
+
+    pub fn listen_for_updates(&self, reconciler: Box<dyn AppReconciler>) {
+        if self
+            .listening
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            // Avoid multiple listeners that would split messages.
+            return;
+        }
+
+        let rx = self.update_rx.clone();
+        thread::spawn(move || {
+            while let Ok(update) = rx.recv() {
+                reconciler.reconcile(update);
+            }
+        });
+    }
+}

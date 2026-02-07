@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# One-command Android dev loop:
+# - ensure emulator/device
+# - build + install
+# - launch app
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+./tools/android-emulator-ensure
+
+ADB="${ADB:-adb}"
+
+pick_device() {
+  "$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}' | head -n 1
+}
+
+SERIAL="$(pick_device || true)"
+if [ -z "${SERIAL:-}" ]; then
+  echo "error: no android device/emulator connected after ensure step" >&2
+  "$ADB" devices >&2 || true
+  exit 1
+fi
+
+# Build (via Gradle) then install deterministically onto the selected device.
+just android-assemble
+
+APK="$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"
+if [ ! -f "$APK" ]; then
+  echo "error: expected apk not found: $APK" >&2
+  exit 1
+fi
+
+"$ADB" -s "$SERIAL" install -r "$APK" >/dev/null
+
+echo "launching com.pika.app"
+# Prefer `am start` with a resolved launcher activity (more reliable than monkey).
+resolved="$("$ADB" -s "$SERIAL" shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.pika.app 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+if [ -n "${resolved:-}" ] && echo "$resolved" | grep -q '/'; then
+  "$ADB" -s "$SERIAL" shell am start -W -n "$resolved" >/dev/null
+else
+  "$ADB" -s "$SERIAL" shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n com.pika.app/.MainActivity >/dev/null
+fi
+
+# Confirm the process is actually running, otherwise fail with useful diagnostics.
+for i in $(seq 1 20); do
+  if "$ADB" -s "$SERIAL" shell pidof com.pika.app >/dev/null 2>&1; then
+    echo "ok: android app launched"
+    exit 0
+  fi
+  sleep 0.5
+done
+
+echo "error: app did not appear to start (pidof com.pika.app empty)" >&2
+"$ADB" -s "$SERIAL" shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.pika.app 2>&1 | sed -n '1,80p' >&2 || true
+exit 1

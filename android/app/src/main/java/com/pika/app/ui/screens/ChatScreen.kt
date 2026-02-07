@@ -1,0 +1,166 @@
+package com.pika.app.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.pika.app.AppManager
+import com.pika.app.rust.AppAction
+import com.pika.app.rust.ChatMessage
+import com.pika.app.rust.MessageDeliveryState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import com.pika.app.ui.theme.PikaBlue
+import com.pika.app.ui.TestTags
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+fun ChatScreen(manager: AppManager, padding: PaddingValues) {
+    val chat = manager.state.currentChat
+    if (chat == null) {
+        Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+            Text("No chat selected")
+        }
+        return
+    }
+
+    var draft by remember { mutableStateOf("") }
+
+    val title = chat.peerName ?: chat.peerNpub
+
+    Scaffold(
+        modifier = Modifier.padding(padding),
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = title,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = {
+                            val stack = manager.state.router.screenStack
+                            manager.dispatch(AppAction.UpdateScreenStack(stack.dropLast(1)))
+                        },
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { inner ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(inner),
+        ) {
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth().testTag(TestTags.CHAT_MESSAGE_LIST),
+                reverseLayout = true,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val reversed = chat.messages.asReversed()
+                items(reversed, key = { it.id }) { msg ->
+                    MessageBubble(message = msg)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.weight(1f).testTag(TestTags.CHAT_MESSAGE_INPUT),
+                    placeholder = { Text("Message") },
+                    singleLine = false,
+                    maxLines = 4,
+                )
+                Spacer(Modifier.width(10.dp))
+                Button(
+                    onClick = {
+                        val text = draft
+                        draft = ""
+                        manager.dispatch(AppAction.SendMessage(chat.chatId, text))
+                    },
+                    modifier = Modifier.testTag(TestTags.CHAT_SEND),
+                ) {
+                    Text("Send")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageBubble(message: ChatMessage) {
+    val isMine = message.isMine
+    val bubbleColor = if (isMine) PikaBlue else MaterialTheme.colorScheme.surfaceVariant
+    val textColor = if (isMine) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+    val align = if (isMine) Alignment.End else Alignment.Start
+
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = align) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Box(
+                modifier =
+                    Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(bubbleColor)
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                        .widthIn(max = 280.dp),
+            ) {
+                Text(message.content, color = textColor, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (isMine) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text =
+                        when (message.delivery) {
+                            is MessageDeliveryState.Pending -> "…"
+                            is MessageDeliveryState.Sent -> "✓"
+                            is MessageDeliveryState.Failed -> "!"
+                        },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+    }
+}

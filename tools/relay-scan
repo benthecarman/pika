@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Probe relays for whether they accept NIP-70 "protected" events for a given kind.
+#
+# Example:
+#   ./tools/relay-scan --kind 443 wss://relay.damus.io wss://relay.primal.net
+#   ./tools/relay-scan --kind 443 --file relays.txt
+#
+# Notes:
+# - This is for manual debugging and discovery. Do not run in CI.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="${ROOT}/target/debug/relay_probe"
+
+kind="443"
+file=""
+
+usage() {
+  cat <<EOF
+usage: tools/relay-scan [--kind N] [--file path] <relay_url...>
+
+Prints one line per relay: URL<TAB>OK|BLOCKED|REJECTED|ERROR<TAB>detail
+
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --kind)
+      kind="${2:-}"
+      shift 2
+      ;;
+    --file)
+      file="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ ! -x "$BIN" ]]; then
+  (cd "$ROOT" && cargo build -p pika_core --bin relay_probe -q)
+fi
+
+relays=("$@")
+if [[ -n "$file" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^# ]] && continue
+    relays+=("$line")
+  done < "$file"
+fi
+
+if [[ ${#relays[@]} -eq 0 ]]; then
+  usage
+  exit 2
+fi
+
+for url in "${relays[@]}"; do
+  out="$("$BIN" "$url" --kind "$kind" --quick 2>&1 || true)"
+  if echo "$out" | rg -q "send_event_to\\(attempt=\\d+\\): success=1 failed=0"; then
+    printf "%s\tOK\t-\n" "$url"
+  elif echo "$out" | rg -q "blocked: event marked as protected"; then
+    printf "%s\tBLOCKED\tprotected\n" "$url"
+  elif echo "$out" | rg -q "send_event_to\\(attempt=\\d+\\): timeout"; then
+    printf "%s\tERROR\ttimeout\n" "$url"
+  elif echo "$out" | rg -q "send_event_to\\(attempt=\\d+\\): error="; then
+    msg="$(echo "$out" | rg -o "send_event_to\\(attempt=\\d+\\): error=.*" -m 1 || true)"
+    printf "%s\tERROR\t%s\n" "$url" "${msg:-send_event_to error}"
+  elif echo "$out" | rg -q "send_event_to\\(attempt=\\d+\\): success=0 failed=1"; then
+    msg="$(echo "$out" | rg -o "failed:.*" -m 1 | tr '\n' ' ' || true)"
+    printf "%s\tREJECTED\t%s\n" "$url" "${msg:-failed}"
+  else
+    msg="$(echo "$out" | tail -n 1 | tr '\n' ' ')"
+    printf "%s\tERROR\t%s\n" "$url" "${msg:-unknown}"
+  fi
+done

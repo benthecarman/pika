@@ -1,0 +1,745 @@
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use futures_util::{SinkExt, StreamExt};
+use nostr_sdk::filter::MatchEventOptions;
+use nostr_sdk::nostr::{Event, EventId, Filter, Kind, PublicKey};
+use nostr_sdk::prelude::{
+    Alphabet, Client, EventBuilder, RelayPoolNotification, SingleLetterTag, Tag,
+};
+use pika_core::{AppAction, AppReconciler, AppUpdate, AuthState, FfiApp};
+use tempfile::tempdir;
+use tokio::net::TcpListener;
+use tokio::sync::{mpsc, oneshot};
+use tokio_tungstenite::tungstenite::Message;
+
+fn write_config(data_dir: &str, relay_url: &str, key_package_relay_url: Option<&str>) {
+    let path = std::path::Path::new(data_dir).join("pika_config.json");
+    let mut v = serde_json::json!({
+        "disable_network": false,
+        "relay_urls": [relay_url],
+    });
+    if let Some(kp) = key_package_relay_url {
+        v.as_object_mut().unwrap().insert(
+            "key_package_relay_urls".to_string(),
+            serde_json::json!([kp]),
+        );
+    }
+    std::fs::write(path, serde_json::to_vec(&v).unwrap()).unwrap();
+}
+
+fn wait_until(what: &str, timeout: Duration, mut f: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if f() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("{what}: condition not met within {timeout:?}");
+}
+
+#[derive(Clone)]
+struct LocalRelayHandle {
+    url: String,
+    shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    state: Arc<Mutex<RelayState>>,
+}
+
+impl Drop for LocalRelayHandle {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+struct RelayState {
+    events: Vec<Event>,
+    event_ids: HashSet<EventId>,
+    conns: HashMap<u64, ConnEntry>,
+    delivered: Vec<(u64, String, EventId)>, // (conn_id, sub_id, event_id)
+    sent_text: Vec<(u64, String)>,          // (conn_id, raw json)
+}
+
+struct ConnEntry {
+    tx: mpsc::UnboundedSender<Message>,
+    subs: HashMap<String, Vec<Filter>>,
+}
+
+fn start_local_relay() -> (LocalRelayHandle, JoinHandle<()>) {
+    let (url_tx, url_rx) = std::sync::mpsc::channel::<(String, oneshot::Sender<()>)>();
+    let state = Arc::new(Mutex::new(RelayState {
+        events: Vec::new(),
+        event_ids: HashSet::new(),
+        conns: HashMap::new(),
+        delivered: Vec::new(),
+        sent_text: Vec::new(),
+    }));
+
+    let state_for_thread = state.clone();
+    let thread = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        rt.block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind relay");
+            let addr: SocketAddr = listener.local_addr().expect("local addr");
+            let url = format!("ws://{}", addr);
+            let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+            url_tx.send((url, shutdown_tx)).unwrap();
+
+            let next_conn_id = Arc::new(AtomicU64::new(1));
+            let state = state_for_thread;
+
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => {
+                        // Best-effort graceful shutdown to avoid noisy client-side "connection reset" logs.
+                        let conns: Vec<mpsc::UnboundedSender<Message>> = {
+                            let st = state.lock().unwrap();
+                            st.conns.values().map(|c| c.tx.clone()).collect()
+                        };
+                        for tx in conns {
+                            let _ = tx.send(Message::Close(None));
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        break;
+                    }
+                    accept = listener.accept() => {
+                        let (stream, _) = match accept {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let state = state.clone();
+                        let next_conn_id = next_conn_id.clone();
+                        tokio::spawn(async move {
+                            let ws = match tokio_tungstenite::accept_async(stream).await {
+                                Ok(ws) => ws,
+                                Err(_) => return,
+                            };
+                            let (mut ws_tx, mut ws_rx) = ws.split();
+
+                            let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
+                            let conn_id = next_conn_id.fetch_add(1, Ordering::Relaxed);
+
+                            {
+                                let mut st = state.lock().unwrap();
+                                st.conns.insert(conn_id, ConnEntry {
+                                    tx: out_tx.clone(),
+                                    subs: HashMap::new(),
+                                });
+                            }
+
+                            // Writer task
+                            let writer_state = state.clone();
+                            let writer = tokio::spawn(async move {
+                                while let Some(msg) = out_rx.recv().await {
+                                    let text = match &msg {
+                                        Message::Text(t) => Some(t.to_string()),
+                                        _ => None,
+                                    };
+                                    if ws_tx.send(msg).await.is_ok() {
+                                        if let Some(text) = text {
+                                            let mut st = writer_state.lock().unwrap();
+                                            st.sent_text.push((conn_id, text));
+                                            if st.sent_text.len() > 500 {
+                                                st.sent_text.drain(0..200);
+                                            }
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            });
+
+                            // Reader loop
+                            while let Some(Ok(msg)) = ws_rx.next().await {
+                                match msg {
+                                    Message::Text(text) => handle_client_msg(&state, conn_id, &text),
+                                    Message::Ping(p) => {
+                                        let _ = out_tx.send(Message::Pong(p));
+                                    }
+                                    Message::Close(_) => break,
+                                    _ => {}
+                                }
+                            }
+
+                            {
+                                let mut st = state.lock().unwrap();
+                                st.conns.remove(&conn_id);
+                            }
+
+                            writer.abort();
+                        });
+                    }
+                }
+            }
+        });
+    });
+
+    let (url, shutdown_tx) = url_rx.recv().unwrap();
+    let handle = LocalRelayHandle {
+        url,
+        shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
+        state,
+    };
+    (handle, thread)
+}
+
+fn send_json(state: &Arc<Mutex<RelayState>>, conn_id: u64, v: serde_json::Value) -> bool {
+    let text = v.to_string();
+    let tx = {
+        let st = state.lock().unwrap();
+        st.conns.get(&conn_id).map(|c| c.tx.clone())
+    };
+    if let Some(tx) = tx {
+        return tx.send(Message::Text(text.into())).is_ok();
+    }
+    false
+}
+
+type SubSnapshot = Vec<(String, Vec<Filter>)>;
+type ConnSnapshot = Vec<(u64, SubSnapshot)>;
+
+fn broadcast_event(state: &Arc<Mutex<RelayState>>, ev: &Event) {
+    let conns: ConnSnapshot = {
+        let st = state.lock().unwrap();
+        st.conns
+            .iter()
+            .map(|(id, c)| {
+                let subs: SubSnapshot = c
+                    .subs
+                    .iter()
+                    .map(|(sid, filters)| (sid.clone(), filters.clone()))
+                    .collect();
+                (*id, subs)
+            })
+            .collect()
+    };
+
+    for (conn_id, subs) in conns {
+        for (sub_id, filters) in subs {
+            if filters
+                .iter()
+                .any(|f| f.match_event(ev, MatchEventOptions::new()))
+            {
+                let v = serde_json::json!(["EVENT", sub_id, ev]);
+                if send_json(state, conn_id, v) {
+                    let mut st = state.lock().unwrap();
+                    st.delivered.push((conn_id, sub_id.clone(), ev.id));
+                }
+            }
+        }
+    }
+}
+
+fn handle_client_msg(state: &Arc<Mutex<RelayState>>, conn_id: u64, text: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
+    let Some(arr) = v.as_array() else {
+        return;
+    };
+    let Some(typ) = arr.first().and_then(|x| x.as_str()) else {
+        return;
+    };
+
+    match typ {
+        "EVENT" => {
+            let Some(ev_v) = arr.get(1) else { return };
+            let Ok(ev) = serde_json::from_value::<Event>(ev_v.clone()) else {
+                return;
+            };
+
+            let is_new = {
+                let mut st = state.lock().unwrap();
+                if st.event_ids.contains(&ev.id) {
+                    false
+                } else {
+                    st.event_ids.insert(ev.id);
+                    st.events.push(ev.clone());
+                    true
+                }
+            };
+
+            // Always ACK OK(true) for MVP.
+            let v = serde_json::json!(["OK", ev.id, true, ""]);
+            let _ = send_json(state, conn_id, v);
+
+            if is_new {
+                broadcast_event(state, &ev);
+            }
+        }
+        "REQ" => {
+            let Some(sub_id) = arr.get(1).and_then(|x| x.as_str()).map(|s| s.to_string()) else {
+                return;
+            };
+            let mut filters: Vec<Filter> = Vec::new();
+            for f in arr.iter().skip(2) {
+                if let Ok(filter) = serde_json::from_value::<Filter>(f.clone()) {
+                    filters.push(filter);
+                }
+            }
+            if filters.is_empty() {
+                return;
+            }
+
+            {
+                let mut st = state.lock().unwrap();
+                if let Some(conn) = st.conns.get_mut(&conn_id) {
+                    conn.subs.insert(sub_id.clone(), filters.clone());
+                }
+            }
+
+            // Send stored events matching filters, then EOSE.
+            let events: Vec<Event> = {
+                let st = state.lock().unwrap();
+                st.events.clone()
+            };
+            for ev in events {
+                if filters
+                    .iter()
+                    .any(|f| f.match_event(&ev, MatchEventOptions::new()))
+                {
+                    let v = serde_json::json!(["EVENT", sub_id, ev]);
+                    let _ = send_json(state, conn_id, v);
+                }
+            }
+            let _ = send_json(state, conn_id, serde_json::json!(["EOSE", sub_id]));
+        }
+        "CLOSE" => {
+            let Some(sub_id) = arr.get(1).and_then(|x| x.as_str()) else {
+                return;
+            };
+            let mut st = state.lock().unwrap();
+            if let Some(conn) = st.conns.get_mut(&conn_id) {
+                conn.subs.remove(sub_id);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn local_relay_delivers_events_to_nostr_sdk_notifications() {
+    let (relay, relay_thread) = start_local_relay();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let sub_keys = nostr_sdk::prelude::Keys::generate();
+        let sub = Client::new(sub_keys.clone());
+        sub.add_relay(relay.url.clone()).await.unwrap();
+        sub.connect().await;
+        let mut rx = sub.notifications();
+
+        let h = "test-h-value";
+        let filter = Filter::new()
+            .kind(Kind::MlsGroupMessage)
+            .custom_tags(SingleLetterTag::lowercase(Alphabet::H), vec![h.to_string()]);
+        sub.subscribe(filter, None).await.unwrap();
+
+        let pub_keys = nostr_sdk::prelude::Keys::generate();
+        let pubc = Client::new(pub_keys.clone());
+        pubc.add_relay(relay.url.clone()).await.unwrap();
+        pubc.connect().await;
+
+        let tag = Tag::parse(["h", h]).unwrap();
+        let event = EventBuilder::new(Kind::MlsGroupMessage, "hello-local-relay")
+            .tags([tag])
+            .sign_with_keys(&pub_keys)
+            .unwrap();
+        pubc.send_event(&event).await.unwrap();
+
+        let start = Instant::now();
+        loop {
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!("nostr-sdk subscriber did not receive event from local relay");
+            }
+            match rx.recv().await {
+                Ok(RelayPoolNotification::Event { event, .. }) => {
+                    if event.kind == Kind::MlsGroupMessage && event.content == "hello-local-relay" {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+    });
+
+    drop(relay);
+    relay_thread.join().unwrap();
+}
+
+#[test]
+fn alice_sends_bob_receives_over_local_relay() {
+    // Use two relays to prove the architecture:
+    // - "general" relay: carries discovery (kind 10051) + normal group traffic.
+    // - "key package" relay: carries protected key packages (kind 443).
+    let (general_relay, general_thread) = start_local_relay();
+    let (kp_relay, kp_thread) = start_local_relay();
+
+    let dir_a = tempdir().unwrap();
+    let dir_b = tempdir().unwrap();
+    // Avoid connecting to built-in public key-package relays during tests.
+    // If Alice used this fallback relay, she'd fail to fetch Bob's key package (which is only
+    // published to kp_relay), so the test still proves key-package-relay discovery works.
+    write_config(
+        &dir_a.path().to_string_lossy(),
+        &general_relay.url,
+        Some(&general_relay.url),
+    );
+    write_config(
+        &dir_b.path().to_string_lossy(),
+        &general_relay.url,
+        Some(&kp_relay.url),
+    );
+
+    let alice = FfiApp::new(dir_a.path().to_string_lossy().to_string());
+    let bob = FfiApp::new(dir_b.path().to_string_lossy().to_string());
+
+    #[derive(Clone)]
+    struct Collector {
+        updates: Arc<Mutex<Vec<AppUpdate>>>,
+    }
+    impl AppReconciler for Collector {
+        fn reconcile(&self, update: AppUpdate) {
+            self.updates.lock().unwrap().push(update);
+        }
+    }
+    let bob_updates = Arc::new(Mutex::new(Vec::<AppUpdate>::new()));
+    bob.listen_for_updates(Box::new(Collector {
+        updates: bob_updates.clone(),
+    }));
+
+    alice.dispatch(AppAction::CreateAccount);
+    bob.dispatch(AppAction::CreateAccount);
+
+    wait_until("alice logged in", Duration::from_secs(5), || {
+        matches!(alice.state().auth, AuthState::LoggedIn { .. })
+    });
+    wait_until("bob logged in", Duration::from_secs(5), || {
+        matches!(bob.state().auth, AuthState::LoggedIn { .. })
+    });
+
+    let (bob_npub, bob_pubkey_hex) = match bob.state().auth {
+        AuthState::LoggedIn { npub, pubkey } => (npub, pubkey),
+        _ => unreachable!(),
+    };
+
+    // Ensure Bob has published the key package relay list (kind 10051) to the *general* relay.
+    let bob_pubkey = PublicKey::parse(&bob_pubkey_hex).expect("pubkey parse");
+    wait_until("bob published kind 10051", Duration::from_secs(10), || {
+        let st = general_relay.state.lock().unwrap();
+        st.events
+            .iter()
+            .any(|e| e.kind == Kind::MlsKeyPackageRelays && e.pubkey == bob_pubkey)
+    });
+
+    // Ensure Bob has published a key package (kind 443) to the *key package* relay, and not to
+    // the general relay. This proves that Alice must use discovery to fetch from the correct relay.
+    wait_until(
+        "bob key package published to kp relay",
+        Duration::from_secs(10),
+        || {
+            let st = kp_relay.state.lock().unwrap();
+            st.events
+                .iter()
+                .any(|e| e.kind == Kind::MlsKeyPackage && e.pubkey == bob_pubkey)
+        },
+    );
+    wait_until(
+        "bob key package not on general relay",
+        Duration::from_secs(10),
+        || {
+            let st = general_relay.state.lock().unwrap();
+            !st.events
+                .iter()
+                .any(|e| e.kind == Kind::MlsKeyPackage && e.pubkey == bob_pubkey)
+        },
+    );
+
+    // Alice creates a DM with Bob (fetch KP, create group, giftwrap welcome).
+    alice.dispatch(AppAction::CreateChat {
+        peer_npub: bob_npub,
+    });
+
+    wait_until("alice chat opened", Duration::from_secs(10), || {
+        alice.state().current_chat.is_some()
+    });
+    wait_until("bob has chat", Duration::from_secs(10), || {
+        !bob.state().chat_list.is_empty()
+    });
+
+    let chat_id = alice.state().current_chat.as_ref().unwrap().chat_id.clone();
+    wait_until("bob chat id matches", Duration::from_secs(10), || {
+        bob.state().chat_list.iter().any(|c| c.chat_id == chat_id)
+    });
+
+    // Ensure Bob's relay subscription is actively filtering for this group's `#h` tag
+    // before Alice publishes any 445 messages (avoids races in local-relay tests).
+    wait_until(
+        "bob subscribed to kind445 #h",
+        Duration::from_secs(10),
+        || {
+            let st = general_relay.state.lock().unwrap();
+
+            // Find Bob's connection by looking for a filter that targets `#p = bob_pubkey_hex`.
+            let bob_conn_id = st.conns.iter().find_map(|(conn_id, conn)| {
+                for filters in conn.subs.values() {
+                    for f in filters {
+                        if let Ok(v) = serde_json::to_value(f) {
+                            if v.get("#p")
+                                .and_then(|x| x.as_array())
+                                .map(|a| a.iter().any(|p| p.as_str() == Some(&bob_pubkey_hex)))
+                                .unwrap_or(false)
+                            {
+                                return Some(*conn_id);
+                            }
+                        }
+                    }
+                }
+                None
+            });
+            let Some(bob_conn_id) = bob_conn_id else {
+                return false;
+            };
+
+            let Some(conn) = st.conns.get(&bob_conn_id) else {
+                return false;
+            };
+
+            // Confirm the group subscription includes this chat id as a `#h` value.
+            for filters in conn.subs.values() {
+                for f in filters {
+                    if let Ok(v) = serde_json::to_value(f) {
+                        let h_ok = v
+                            .get("#h")
+                            .and_then(|x| x.as_array())
+                            .map(|a| a.iter().any(|h| h.as_str() == Some(chat_id.as_str())))
+                            .unwrap_or(false);
+                        let kind_ok = v
+                            .get("kinds")
+                            .and_then(|x| x.as_array())
+                            .map(|a| a.iter().any(|k| k.as_i64() == Some(445)))
+                            .unwrap_or(false);
+                        if h_ok && kind_ok {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        },
+    );
+
+    let bob_conn_id = {
+        let st = general_relay.state.lock().unwrap();
+        st.conns
+            .iter()
+            .find_map(|(conn_id, conn)| {
+                for filters in conn.subs.values() {
+                    for f in filters {
+                        if let Ok(v) = serde_json::to_value(f) {
+                            if v.get("#p")
+                                .and_then(|x| x.as_array())
+                                .map(|a| a.iter().any(|p| p.as_str() == Some(&bob_pubkey_hex)))
+                                .unwrap_or(false)
+                            {
+                                return Some(*conn_id);
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .expect("bob conn id")
+    };
+
+    alice.dispatch(AppAction::SendMessage {
+        chat_id: chat_id.clone(),
+        content: "hi-from-alice".into(),
+    });
+
+    // Alice should mark the message as Sent after OK from relay.
+    wait_until("alice message sent", Duration::from_secs(10), || {
+        alice
+            .state()
+            .current_chat
+            .as_ref()
+            .and_then(|c| c.messages.iter().find(|m| m.content == "hi-from-alice"))
+            .map(|m| matches!(m.delivery, pika_core::MessageDeliveryState::Sent))
+            .unwrap_or(false)
+    });
+
+    // Relay should have received the wrapper event tagged with `h = chat_id`.
+    wait_until("relay has kind445 for chat", Duration::from_secs(5), || {
+        let st = general_relay.state.lock().unwrap();
+        st.events.iter().any(|e| {
+            if e.kind != Kind::MlsGroupMessage {
+                return false;
+            }
+            let Ok(v) = serde_json::to_value(e) else {
+                return false;
+            };
+            v.get("tags")
+                .and_then(|t| t.as_array())
+                .map(|tags| {
+                    tags.iter().any(|tag| {
+                        tag.as_array().and_then(|a| {
+                            if a.len() >= 2 && a[0].as_str() == Some("h") {
+                                a[1].as_str()
+                            } else {
+                                None
+                            }
+                        }) == Some(chat_id.as_str())
+                    })
+                })
+                .unwrap_or(false)
+        })
+    });
+
+    let wrapper_event_id = {
+        let st = general_relay.state.lock().unwrap();
+        st.events
+            .iter()
+            .find(|e| {
+                if e.kind != Kind::MlsGroupMessage {
+                    return false;
+                }
+                let Ok(v) = serde_json::to_value(e) else {
+                    return false;
+                };
+                v.get("tags")
+                    .and_then(|t| t.as_array())
+                    .map(|tags| {
+                        tags.iter().any(|tag| {
+                            tag.as_array().and_then(|a| {
+                                if a.len() >= 2 && a[0].as_str() == Some("h") {
+                                    a[1].as_str()
+                                } else {
+                                    None
+                                }
+                            }) == Some(chat_id.as_str())
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|e| e.id)
+            .expect("wrapper event id")
+    };
+
+    // If this fails, the app is emitting invalid Nostr events (clients will drop them).
+    {
+        let st = general_relay.state.lock().unwrap();
+        let ev = st
+            .events
+            .iter()
+            .find(|e| e.id == wrapper_event_id)
+            .expect("wrapper event present");
+        ev.verify().expect("kind445 wrapper event must verify");
+    }
+
+    // Prove the relay actually delivered the 445 event to Bob's subscription.
+    wait_until("relay delivered 445 to bob", Duration::from_secs(5), || {
+        let st = general_relay.state.lock().unwrap();
+        st.delivered
+            .iter()
+            .any(|(cid, _sid, eid)| *cid == bob_conn_id && *eid == wrapper_event_id)
+    });
+
+    // Bob should observe the message either in the preview or as an unread increment.
+    // If this times out, dump any toast errors we observed.
+    let start = Instant::now();
+    loop {
+        let ok = bob
+            .state()
+            .chat_list
+            .iter()
+            .find(|c| c.chat_id == chat_id)
+            .map(|c| c.unread_count > 0 || c.last_message.is_some())
+            .unwrap_or(false);
+        if ok {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            let toasts: Vec<String> = bob_updates
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|u| match u {
+                    AppUpdate::ToastChanged { toast: Some(t), .. } => Some(t.clone()),
+                    _ => None,
+                })
+                .collect();
+            let sent_to_bob: Vec<String> = {
+                let st = general_relay.state.lock().unwrap();
+                st.sent_text
+                    .iter()
+                    .filter(|(cid, _)| *cid == bob_conn_id)
+                    .rev()
+                    .take(10)
+                    .map(|(_, t)| t.clone())
+                    .collect()
+            };
+            panic!(
+                "bob received message: timeout; toasts={toasts:?}; bob_chat_list={:?}; relay_sent_to_bob(last10)={sent_to_bob:?}",
+                bob.state().chat_list
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Open the chat and validate message attributes.
+    bob.dispatch(AppAction::OpenChat { chat_id });
+    wait_until(
+        "bob opened chat has message",
+        Duration::from_secs(10),
+        || {
+            bob.state()
+                .current_chat
+                .as_ref()
+                .and_then(|c| c.messages.iter().find(|m| m.content == "hi-from-alice"))
+                .is_some()
+        },
+    );
+    let msg = bob
+        .state()
+        .current_chat
+        .unwrap()
+        .messages
+        .into_iter()
+        .find(|m| m.content == "hi-from-alice")
+        .unwrap();
+    assert!(!msg.is_mine);
+
+    // Preview should match plaintext.
+    wait_until("bob preview updated", Duration::from_secs(5), || {
+        bob.state()
+            .chat_list
+            .iter()
+            .find(|c| c.chat_id == bob.state().current_chat.as_ref().unwrap().chat_id)
+            .and_then(|c| c.last_message.clone())
+            .as_deref()
+            == Some("hi-from-alice")
+    });
+    let preview = bob
+        .state()
+        .chat_list
+        .iter()
+        .find(|c| c.chat_id == bob.state().current_chat.as_ref().unwrap().chat_id)
+        .and_then(|c| c.last_message.clone());
+    assert_eq!(preview.as_deref(), Some("hi-from-alice"));
+
+    drop(general_relay);
+    drop(kp_relay);
+    general_thread.join().unwrap();
+    kp_thread.join().unwrap();
+}

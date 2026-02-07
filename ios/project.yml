@@ -1,0 +1,48 @@
+name: Pika
+options:
+  bundleIdPrefix: com.pika
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.pika.app
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: 5.0
+
+targets:
+  Pika:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Bindings
+        excludes:
+          - "*.h"
+          - "*.modulemap"
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+    dependencies:
+      - framework: Frameworks/PikaCore.xcframework
+        embed: false
+
+  PikaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Pika
+
+schemes:
+  Pika:
+    build:
+      targets:
+        Pika: all
+    test:
+      targets:
+        - name: PikaUITests
+          randomExecutionOrder: true
