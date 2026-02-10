@@ -4,6 +4,39 @@ set shell := ["bash", "-lc"]
 default:
   @just --list
 
+# Print developer-facing usage notes (targets, env vars, common flows).
+info:
+  @echo "Pika: run commands + target selection"
+  @echo
+  @echo "iOS"
+  @echo "  Simulator:"
+  @echo "    just run-ios --sim"
+  @echo "  Hardware device:"
+  @echo "    just run-ios --device"
+  @echo "  List connected iPhones:"
+  @echo "    just run-ios --list-devices"
+  @echo "  Choose a specific iPhone:"
+  @echo "    just run-ios --udid <UDID>"
+  @echo
+  @echo "  Env equivalents:"
+  @echo "    PIKA_IOS_DEVICE=1               (default to device)"
+  @echo "    PIKA_IOS_DEVICE_UDID=<UDID>     (pick device)"
+  @echo "    PIKA_IOS_DEVELOPMENT_TEAM=...   (required for device builds)"
+  @echo "    PIKA_IOS_CONSOLE=1              (attach console on device)"
+  @echo
+  @echo "Android"
+  @echo "  Emulator:"
+  @echo "    just run-android --emulator"
+  @echo "  Hardware device:"
+  @echo "    just run-android --device"
+  @echo "  List targets (emulators + devices):"
+  @echo "    just run-android --list-targets"
+  @echo "  Choose a specific target:"
+  @echo "    just run-android --serial <adb-serial>"
+  @echo
+  @echo "  Env equivalents:"
+  @echo "    PIKA_ANDROID_SERIAL=<serial>"
+
 # Run pika_core tests.
 test *ARGS:
   cargo test -p pika_core {{ARGS}}
