@@ -173,13 +173,13 @@ ios-xcframework: ios-gen-swift ios-rust
 
 # Generate Xcode project via xcodegen.
 ios-xcodeproj:
-  cd ios && xcodegen generate
+  cd ios && rm -rf Pika.xcodeproj && xcodegen generate
 
 # Build iOS app for simulator.
 ios-build-sim: ios-xcframework ios-xcodeproj
   DEV_DIR=$(ls -d /Applications/Xcode*.app/Contents/Developer 2>/dev/null | sort | tail -n 1); \
   if [ -z "$DEV_DIR" ]; then echo "Xcode not found under /Applications"; exit 1; fi; \
-  env -u LD -u CC -u CXX DEVELOPER_DIR="$DEV_DIR" xcodebuild -project ios/Pika.xcodeproj -target Pika -configuration Debug -sdk iphonesimulator build CODE_SIGNING_ALLOWED=NO
+  env -u LD -u CC -u CXX DEVELOPER_DIR="$DEV_DIR" xcodebuild -project ios/Pika.xcodeproj -target Pika -configuration Debug -sdk iphonesimulator build CODE_SIGNING_ALLOWED=NO PRODUCT_BUNDLE_IDENTIFIER="${PIKA_IOS_BUNDLE_ID:-com.justinmoon.pika.dev}"
 
 # Run iOS UI tests on simulator (skips E2E deployed-bot test).
 ios-ui-test: ios-xcframework ios-xcodeproj
@@ -187,7 +187,7 @@ ios-ui-test: ios-xcframework ios-xcodeproj
   if [ -z "$DEV_DIR" ]; then echo "Xcode not found under /Applications"; exit 1; fi; \
   udid="$(./tools/ios-sim-ensure | sed -n 's/^ok: ios simulator ready (udid=\(.*\))$/\1/p')"; \
   if [ -z "$udid" ]; then echo "error: could not determine simulator udid"; exit 1; fi; \
-  env -u LD -u CC -u CXX DEVELOPER_DIR="$DEV_DIR" xcodebuild -project ios/Pika.xcodeproj -scheme Pika -destination "id=$udid" test CODE_SIGNING_ALLOWED=NO \
+  env -u LD -u CC -u CXX DEVELOPER_DIR="$DEV_DIR" xcodebuild -project ios/Pika.xcodeproj -scheme Pika -destination "id=$udid" test CODE_SIGNING_ALLOWED=NO PRODUCT_BUNDLE_IDENTIFIER="${PIKA_IOS_BUNDLE_ID:-com.justinmoon.pika.dev}" \
     -skip-testing:PikaUITests/PikaUITests/testE2E_deployedRustBot_pingPong
 
 # iOS E2E: local docker relay + local Rust bot. Requires Docker.
@@ -222,8 +222,8 @@ ios-ui-e2e: ios-xcframework ios-xcodeproj
     PIKA_UI_E2E_BOT_NPUB="${PIKA_UI_E2E_BOT_NPUB}" \
     PIKA_UI_E2E_RELAYS="${PIKA_UI_E2E_RELAYS}" \
     PIKA_UI_E2E_KP_RELAYS="${PIKA_UI_E2E_KP_RELAYS}" \
-    PIKA_UI_E2E_NSEC="$nsec" \
-    env -u LD -u CC -u CXX DEVELOPER_DIR="$DEV_DIR" xcodebuild -project ios/Pika.xcodeproj -scheme Pika -destination "id=$udid" test CODE_SIGNING_ALLOWED=NO \
+  PIKA_UI_E2E_NSEC="$nsec" \
+    env -u LD -u CC -u CXX DEVELOPER_DIR="$DEV_DIR" xcodebuild -project ios/Pika.xcodeproj -scheme Pika -destination "id=$udid" test CODE_SIGNING_ALLOWED=NO PRODUCT_BUNDLE_IDENTIFIER="${PIKA_IOS_BUNDLE_ID:-com.justinmoon.pika.dev}" \
       -only-testing:PikaUITests/PikaUITests/testE2E_deployedRustBot_pingPong
 
 # Optional: device automation (npx). Not required for building.
@@ -233,12 +233,12 @@ device:
 # Show Android manual QA instructions.
 android-manual-qa:
   @echo "Manual QA prompt: prompts/android-agent-device-manual-qa.md"
-  @echo "Tip: run `npx --yes agent-device --platform android open com.pika.app` then follow the prompt."
+  @echo "Tip: run `npx --yes agent-device --platform android open com.justinmoon.pika.dev` then follow the prompt."
 
 # Show iOS manual QA instructions.
 ios-manual-qa:
   @echo "Manual QA prompt: prompts/ios-agent-device-manual-qa.md"
-  @echo "Tip: run `./tools/agent-device --platform ios open com.pika.app` then follow the prompt."
+  @echo "Tip: run `./tools/agent-device --platform ios open com.justinmoon.pika.dev` then follow the prompt."
 
 # Build, install, and launch Android app on connected device.
 run-android:
@@ -247,12 +247,6 @@ run-android:
 # Build, install, and launch iOS app on simulator.
 run-ios:
   ./tools/run-ios
-
-run-ios-device:
-  ./tools/run-ios --device
-
-run-ios-device-console:
-  ./tools/run-ios --device --console
 
 # Check iOS dev environment (Xcode, simulators, runtimes).
 doctor-ios:

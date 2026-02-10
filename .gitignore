@@ -26,4 +26,5 @@ worktrees
 # Local dev artifacts
 .pika-cli-test-nsec
 .env
+.env.local
 .cargo/config.toml
