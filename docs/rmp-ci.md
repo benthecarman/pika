@@ -34,7 +34,7 @@ RMP checks are integrated into the repo's single CI entrypoint, not a separate w
   - runs `rmp run android` in CI/headless mode
 - macOS lane (`nightly-macos-ios`): `just rmp-nightly-macos`
   - scaffolds project
-  - runs on WarpBuild macOS (`warp-macos-15-arm64-12x`)
+  - runs on WarpBuild macOS (`warp-macos-15-arm64-6x`)
   - restores Nix binaries via `DeterminateSystems/magic-nix-cache-action`
   - restores Cargo/target via `WarpBuilds/cache`
   - runs `rmp run ios` on a simulator
