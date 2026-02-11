@@ -49,6 +49,26 @@
            then system-images-android-35-google-apis-arm64-v8a
            else system-images-android-35-google-apis-x86-64)
         ]);
+
+        # `rmp` runner on PATH inside `nix develop` without packaging the full Rust workspace.
+        # Wrapper builds the workspace binary then execs it.
+        rmp = pkgs.writeShellScriptBin "rmp" ''
+          set -euo pipefail
+
+          # Find workspace root by walking up to `rmp.toml`.
+          root="$PWD"
+          while [ "$root" != "/" ] && [ ! -f "$root/rmp.toml" ]; do
+            root="$(dirname "$root")"
+          done
+          if [ ! -f "$root/rmp.toml" ]; then
+            echo "error: could not find rmp.toml from $PWD" >&2
+            exit 2
+          fi
+
+          cd "$root"
+          cargo build -q -p rmp-cli
+          exec "$root/target/debug/rmp" "$@"
+        '';
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [
@@ -66,6 +86,7 @@
             pkgs.git
             pkgs.cargo-ndk
             pkgs.gradle
+            rmp
           ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
             pkgs.xcodegen
           ];
@@ -74,8 +95,10 @@
             export ANDROID_HOME=${androidSdk}/share/android-sdk
             export ANDROID_SDK_ROOT=${androidSdk}/share/android-sdk
             export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
-            export ANDROID_AVD_HOME=$PWD/.android-avd
-            export ANDROID_USER_HOME=$PWD/.android-home
+            # AVDs/user state are mutable runtime data; keep them in stable user paths
+            # so all git worktrees share the same emulator inventory.
+            export ANDROID_AVD_HOME="''${ANDROID_AVD_HOME:-''${XDG_DATA_HOME:-$HOME/.local/share}/android/avd}"
+            export ANDROID_USER_HOME="''${ANDROID_USER_HOME:-''${XDG_STATE_HOME:-$HOME/.local/state}/android}"
             export JAVA_HOME=${pkgs.jdk17_headless}
             export PATH=$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
             export PATH=$PWD/tools:$PATH

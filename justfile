@@ -32,6 +32,20 @@ info:
   @echo
   @echo "  Env equivalents:"
   @echo "    PIKA_ANDROID_SERIAL=<serial>"
+  @echo
+  @echo "RMP (new)"
+  @echo "  Run iOS simulator:"
+  @echo "    just rmp run ios"
+  @echo "  Run Android emulator:"
+  @echo "    just rmp run android"
+  @echo "  List devices:"
+  @echo "    just rmp devices list"
+  @echo "  Generate bindings:"
+  @echo "    just rmp bindings all"
+
+# Run the new Rust `rmp` CLI.
+rmp *ARGS:
+  cargo run -p rmp-cli -- {{ARGS}}
 
 # Run pika_core tests.
 test *ARGS:

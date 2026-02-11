@@ -1,0 +1,16 @@
+[project]
+name = "pika"
+org = "com.justinmoon"
+
+[core]
+crate = "pika_core"
+bindings = "uniffi"
+
+[ios]
+bundle_id = "com.justinmoon.pika"
+scheme = "Pika"
+
+[android]
+app_id = "com.justinmoon.pika"
+avd_name = "pika_api35"
+
