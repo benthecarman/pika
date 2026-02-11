@@ -1,10 +1,17 @@
-name: rmp-init-smoke
+name: nightly
 
 on:
+  schedule:
+    - cron: '0 8 * * *'
   workflow_dispatch:
+    inputs:
+      run_macos_ios:
+        description: "Run macOS iOS nightly lane"
+        type: boolean
+        default: true
 
 jobs:
-  scaffold-and-check:
+  nightly-linux:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +36,13 @@ jobs:
           key: ${{ github.repository }}-cargo-target-v1-${{ runner.os }}
           path: target
 
-      # Current stage: verify `rmp init` can scaffold a fresh project and compile its Rust core.
-      # Next stage: add macOS iOS-sim launch and Android emulator launch jobs.
-      - run: nix develop -c just rmp-init-smoke
+      - run: nix develop .#default -c just rmp-nightly-linux
+
+  nightly-macos-ios:
+    if: github.event_name == 'schedule' || github.event.inputs.run_macos_ios == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nixbuild/nix-quick-install-action@v30
+      - run: xcodebuild -version
+      - run: nix develop .#default -c just rmp-nightly-macos

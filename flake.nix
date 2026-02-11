@@ -148,6 +148,30 @@ EOF
             echo ""
           '';
         };
+
+        devShells.rmp = pkgs.mkShell {
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            pkgs.libiconv
+          ];
+
+          packages = [
+            rustToolchain
+            pkgs.just
+            pkgs.nodejs_22
+            pkgs.python3
+            pkgs.curl
+            pkgs.git
+            rmp
+          ];
+
+          shellHook = ''
+            export IN_NIX_SHELL=1
+            echo ""
+            echo "RMP dev environment ready"
+            echo "  Rust: $(rustc --version)"
+            echo ""
+          '';
+        };
       }
     );
 }

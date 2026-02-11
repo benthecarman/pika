@@ -513,13 +513,15 @@ fn ensure_android_emulator(
     explicit_serial: Option<&str>,
     verbose: bool,
 ) -> Result<String, CliError> {
+    let allow_headless = android_allow_headless();
+
     if let Some(s) = explicit_serial {
         if !adb_serial_exists(s)? {
             return Err(CliError::user(format!(
                 "requested android serial not connected: {s}"
             )));
         }
-        if s.starts_with("emulator-") {
+        if !allow_headless && s.starts_with("emulator-") {
             let avd_name = emulator_avd_name(s).unwrap_or_else(|| avd.to_string());
             if emulator_is_headless_only(&avd_name)? {
                 if avd_exists(&avd_name)? {
@@ -542,22 +544,24 @@ fn ensure_android_emulator(
     }
 
     if let Some(s) = pick_any_emulator_serial()? {
-        let avd_name = emulator_avd_name(&s).unwrap_or_else(|| avd.to_string());
-        if emulator_is_headless_only(&avd_name)? {
-            if avd_exists(&avd_name)? {
+        if !allow_headless {
+            let avd_name = emulator_avd_name(&s).unwrap_or_else(|| avd.to_string());
+            if emulator_is_headless_only(&avd_name)? {
+                if avd_exists(&avd_name)? {
+                    human_log(
+                        verbose,
+                        format!("emulator is headless (avd={avd_name}); restarting with GUI"),
+                    );
+                    kill_emulator(&s, verbose)?;
+                    return start_emulator_and_wait(root, &avd_name, verbose);
+                }
                 human_log(
                     verbose,
-                    format!("emulator is headless (avd={avd_name}); restarting with GUI"),
+                    format!(
+                        "emulator is headless (avd={avd_name}) but AVD is not available locally; keeping existing emulator"
+                    ),
                 );
-                kill_emulator(&s, verbose)?;
-                return start_emulator_and_wait(root, &avd_name, verbose);
             }
-            human_log(
-                verbose,
-                format!(
-                    "emulator is headless (avd={avd_name}) but AVD is not available locally; keeping existing emulator"
-                ),
-            );
         }
         human_log(
             verbose,
@@ -593,6 +597,7 @@ fn ensure_android_emulator(
 
 fn start_emulator_and_wait(root: &Path, avd: &str, verbose: bool) -> Result<String, CliError> {
     human_log(verbose, format!("starting android emulator: {avd}"));
+    let allow_headless = android_allow_headless();
     let log_path = root.join("emulator.log");
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -609,10 +614,13 @@ fn start_emulator_and_wait(root: &Path, avd: &str, verbose: bool) -> Result<Stri
         .arg(avd)
         .arg("-no-snapshot")
         .arg("-no-audio")
+        .arg("-no-boot-anim")
         .arg("-gpu")
-        .arg("swiftshader_indirect")
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log2));
+        .arg("swiftshader_indirect");
+    if allow_headless {
+        child.arg("-no-window");
+    }
+    child.stdout(Stdio::from(log)).stderr(Stdio::from(log2));
 
     let _ = child
         .spawn()
@@ -702,6 +710,16 @@ fn emulator_is_headless_only(avd: &str) -> Result<bool, CliError> {
         }
     }
     Ok(has_headless_qemu && !has_frontend)
+}
+
+fn android_allow_headless() -> bool {
+    if std::env::var("RMP_ANDROID_ALLOW_HEADLESS").ok().as_deref() == Some("1") {
+        return true;
+    }
+    std::env::var("CI")
+        .ok()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn avd_exists(avd: &str) -> Result<bool, CliError> {
