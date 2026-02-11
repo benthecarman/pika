@@ -16,6 +16,9 @@ RMP checks are integrated into the repo's single CI entrypoint, not a separate w
 - Internal lanes:
   - `check-pika`: existing app checks via `just pre-merge-pika`
   - `check-rmp`: RMP template/CLI checks via `just pre-merge-rmp`
+- PR approval gate:
+  - if PR actor is `justinmoon`, pre-merge lanes run immediately
+  - otherwise lanes target `ci-approval` environment and require `justinmoon` approval
 
 `just pre-merge-rmp` is Linux-safe and validates:
 
