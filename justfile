@@ -32,6 +32,87 @@ info:
   @echo
   @echo "  Env equivalents:"
   @echo "    PIKA_ANDROID_SERIAL=<serial>"
+  @echo
+  @echo "RMP (new)"
+  @echo "  Run iOS simulator:"
+  @echo "    just rmp run ios"
+  @echo "  Run Android emulator:"
+  @echo "    just rmp run android"
+  @echo "  List devices:"
+  @echo "    just rmp devices list"
+  @echo "  Generate bindings:"
+  @echo "    just rmp bindings all"
+
+# Run the new Rust `rmp` CLI.
+rmp *ARGS:
+  cargo run -p rmp-cli -- {{ARGS}}
+
+# Smoke test `rmp init` output locally (scaffold + doctor + core check).
+rmp-init-smoke NAME="rmp-smoke" ORG="com.example":
+  set -euo pipefail; \
+  ROOT="$PWD"; \
+  BIN="$ROOT/target/debug/rmp"; \
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/rmp-init-smoke.XXXXXX")"; \
+  cargo build -p rmp-cli; \
+  "$BIN" init "$TMP/{{NAME}}" --yes --org "{{ORG}}"; \
+  cd "$TMP/{{NAME}}"; \
+  "$BIN" doctor --json >/dev/null; \
+  cargo check -p pika_core; \
+  echo "ok: rmp init smoke passed ($TMP/{{NAME}})"
+
+# End-to-end launch check for a freshly initialized project.
+rmp-init-run PLATFORM="android" NAME="rmp-e2e" ORG="com.example":
+  set -euo pipefail; \
+  ROOT="$PWD"; \
+  BIN="$ROOT/target/debug/rmp"; \
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/rmp-init-run.XXXXXX")"; \
+  cargo build -p rmp-cli; \
+  "$BIN" init "$TMP/{{NAME}}" --yes --org "{{ORG}}"; \
+  cd "$TMP/{{NAME}}"; \
+  "$BIN" run {{PLATFORM}}
+
+# Linux-safe CI checks for `rmp init` output.
+rmp-init-smoke-ci ORG="com.example":
+  set -euo pipefail; \
+  ROOT="$PWD"; \
+  BIN="$ROOT/target/debug/rmp"; \
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/rmp-init-smoke-ci.XXXXXX")"; \
+  cargo build -p rmp-cli; \
+  RMP_INIT_TEMPLATE_ROOT="$ROOT" "$BIN" init "$TMP/rmp-all" --yes --org "{{ORG}}" --json >/dev/null; \
+  (cd "$TMP/rmp-all" && cargo check -p pika_core >/dev/null); \
+  RMP_INIT_TEMPLATE_ROOT="$ROOT" "$BIN" init "$TMP/rmp-android" --yes --org "{{ORG}}" --no-ios --json >/dev/null; \
+  (cd "$TMP/rmp-android" && cargo check -p pika_core >/dev/null); \
+  RMP_INIT_TEMPLATE_ROOT="$ROOT" "$BIN" init "$TMP/rmp-ios" --yes --org "{{ORG}}" --no-android --json >/dev/null; \
+  (cd "$TMP/rmp-ios" && cargo check -p pika_core >/dev/null); \
+  echo "ok: rmp init ci smoke passed"
+
+# Nightly Linux lane: scaffold + Android emulator run.
+rmp-nightly-linux NAME="rmp-nightly-linux" ORG="com.example" AVD="rmp_ci_api35":
+  set -euo pipefail; \
+  ROOT="$PWD"; \
+  BIN="$ROOT/target/debug/rmp"; \
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/rmp-nightly-linux.XXXXXX")"; \
+  ABI="x86_64"; \
+  IMG="system-images;android-35;google_apis;$ABI"; \
+  cargo build -p rmp-cli; \
+  "$BIN" init "$TMP/{{NAME}}" --yes --org "{{ORG}}" --no-ios; \
+  if ! emulator -list-avds | grep -qx "{{AVD}}"; then \
+    echo "no" | avdmanager create avd -n "{{AVD}}" -k "$IMG" --force; \
+  fi; \
+  cd "$TMP/{{NAME}}"; \
+  CI=1 "$BIN" run android --avd "{{AVD}}" --verbose; \
+  adb devices || true
+
+# Nightly macOS lane: scaffold + iOS simulator run.
+rmp-nightly-macos NAME="rmp-nightly-macos" ORG="com.example":
+  set -euo pipefail; \
+  ROOT="$PWD"; \
+  BIN="$ROOT/target/debug/rmp"; \
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/rmp-nightly-macos.XXXXXX")"; \
+  cargo build -p rmp-cli; \
+  "$BIN" init "$TMP/{{NAME}}" --yes --org "{{ORG}}" --no-android; \
+  cd "$TMP/{{NAME}}"; \
+  "$BIN" run ios --verbose
 
 # Run pika_core tests.
 test *ARGS:
@@ -45,14 +126,29 @@ fmt:
 clippy *ARGS:
   cargo clippy -p pika_core {{ARGS}} -- -D warnings
 
-# CI-safe pre-merge: skips cdylib/staticlib (OOM on 7GB GitHub runners).
-pre-merge: fmt
+# CI-safe pre-merge for the Pika app lane.
+pre-merge-pika: fmt
   just clippy --lib --tests
   just test --lib --tests
   cargo build -p pika-cli
   npx --yes @justinmoon/agent-tools check-docs
   npx --yes @justinmoon/agent-tools check-justfile
+  @echo "pre-merge-pika complete"
+
+# CI-safe pre-merge for the RMP tooling lane.
+pre-merge-rmp:
+  just rmp-init-smoke-ci
+  @echo "pre-merge-rmp complete"
+
+# Single CI entrypoint for the whole repo.
+pre-merge:
+  just pre-merge-pika
+  just pre-merge-rmp
   @echo "pre-merge complete"
+
+# Nightly root task.
+nightly:
+  just pre-merge
 
 # Full QA: fmt, clippy, test, android build, iOS sim build.
 qa: fmt clippy test android-assemble ios-build-sim
