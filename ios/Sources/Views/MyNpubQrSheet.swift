@@ -9,7 +9,19 @@ struct MyNpubQrSheet: View {
     let onLogout: @MainActor () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var showNsec = false
-    @State private var showLogoutConfirm = false
+    @State private var showLogoutConfirm: Bool
+
+    init(
+        npub: String,
+        nsecProvider: @MainActor @escaping () -> String?,
+        onLogout: @MainActor @escaping () -> Void,
+        showLogoutConfirm: Bool = false
+    ) {
+        self.npub = npub
+        self.nsecProvider = nsecProvider
+        self.onLogout = onLogout
+        self._showLogoutConfirm = State(initialValue: showLogoutConfirm)
+    }
 
     var body: some View {
         NavigationStack {
@@ -131,6 +143,15 @@ struct MyNpubQrSheet: View {
         npub: PreviewAppState.sampleNpub,
         nsecProvider: { nil },
         onLogout: {}
+    )
+}
+
+#Preview("My npub - Logout Confirm") {
+    MyNpubQrSheet(
+        npub: PreviewAppState.sampleNpub,
+        nsecProvider: { "nsec1previewexample" },
+        onLogout: {},
+        showLogoutConfirm: true
     )
 }
 #endif
