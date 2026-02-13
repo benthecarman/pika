@@ -1,3 +1,10 @@
+---
+summary: Audit of the iOS SwiftUI frontend with recommendations for previews, testability, modern APIs, and Liquid Glass
+read_when:
+  - reviewing the SwiftUI frontend for modern API usage and Liquid Glass adoption
+  - improving SwiftUI previews and testability without breaking Rust state ownership
+---
+
 # SwiftUI Frontend Audit (iOS)
 
 Date: 2026-02-13
