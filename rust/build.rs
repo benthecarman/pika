@@ -34,7 +34,7 @@ fn main() {
     // line doesn't always pull that archive in automatically for cdylib/staticlib.
     let target = env::var("TARGET").unwrap_or_default();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let is_sim = target.contains("ios-sim") || target.starts_with("x86_64-apple-ios");
+    let is_sim = target.contains("ios-sim");
     let rt = if is_sim {
         "clang_rt.iossim"
     } else {

@@ -246,11 +246,9 @@ ios-rust:
   base_env=(env -u LIBRARY_PATH -u SDKROOT -u MACOSX_DEPLOYMENT_TARGET -u CC -u CXX -u AR -u RANLIB \
     DEVELOPER_DIR="$DEV_DIR" CC="$CC_BIN" CXX="$CXX_BIN" AR="$AR_BIN" RANLIB="$RANLIB_BIN" IPHONEOS_DEPLOYMENT_TARGET="$IOS_MIN" \
     CARGO_TARGET_AARCH64_APPLE_IOS_LINKER="$CC_BIN" \
-    CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER="$CC_BIN" \
-    CARGO_TARGET_X86_64_APPLE_IOS_LINKER="$CC_BIN"); \
+    CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER="$CC_BIN"); \
   "${base_env[@]}" SDKROOT="$SDKROOT_IOS" RUSTFLAGS="-C linker=$CC_BIN -C link-arg=-miphoneos-version-min=$IOS_MIN" cargo build -p pika_core --release --lib --target aarch64-apple-ios; \
-  "${base_env[@]}" SDKROOT="$SDKROOT_SIM" RUSTFLAGS="-C linker=$CC_BIN -C link-arg=-mios-simulator-version-min=$IOS_MIN" cargo build -p pika_core --release --lib --target aarch64-apple-ios-sim; \
-  "${base_env[@]}" SDKROOT="$SDKROOT_SIM" RUSTFLAGS="-C linker=$CC_BIN -C link-arg=-mios-simulator-version-min=$IOS_MIN" cargo build -p pika_core --release --lib --target x86_64-apple-ios
+  "${base_env[@]}" SDKROOT="$SDKROOT_SIM" RUSTFLAGS="-C linker=$CC_BIN -C link-arg=-mios-simulator-version-min=$IOS_MIN" cargo build -p pika_core --release --lib --target aarch64-apple-ios-sim
 
 # Build PikaCore.xcframework (device + simulator slices).
 ios-xcframework: ios-gen-swift ios-rust
@@ -258,13 +256,9 @@ ios-xcframework: ios-gen-swift ios-rust
   mkdir -p ios/.build/headers ios/Frameworks
   cp ios/Bindings/pika_coreFFI.h ios/.build/headers/pika_coreFFI.h
   cp ios/Bindings/pika_coreFFI.modulemap ios/.build/headers/module.modulemap
-  ./tools/xcode-run xcrun lipo -create \
-    target/aarch64-apple-ios-sim/release/libpika_core.a \
-    target/x86_64-apple-ios/release/libpika_core.a \
-    -output ios/.build/libpika_core_sim.a; \
   ./tools/xcode-run xcodebuild -create-xcframework \
     -library target/aarch64-apple-ios/release/libpika_core.a -headers ios/.build/headers \
-    -library ios/.build/libpika_core_sim.a -headers ios/.build/headers \
+    -library target/aarch64-apple-ios-sim/release/libpika_core.a -headers ios/.build/headers \
     -output ios/Frameworks/PikaCore.xcframework
 
 # Generate Xcode project via xcodegen.
