@@ -24,6 +24,8 @@ final class AppManager: AppReconciler {
     var state: AppState
     private var lastRevApplied: UInt64
     private let nsecStore: NsecStore
+    /// True while we're waiting for a stored session to be restored by Rust.
+    var isRestoringSession: Bool = false
 
     init(core: AppCore, nsecStore: NsecStore) {
         self.core = core
@@ -36,6 +38,7 @@ final class AppManager: AppReconciler {
         core.listenForUpdates(reconciler: self)
 
         if let nsec = nsecStore.getNsec(), !nsec.isEmpty {
+            isRestoringSession = true
             core.dispatch(action: .restoreSession(nsec: nsec))
         }
     }
@@ -116,6 +119,13 @@ final class AppManager: AppReconciler {
         switch update {
         case .fullState(let s):
             state = s
+            if isRestoringSession {
+                // Clear once we've transitioned away from login (success) or if
+                // the router settles on login (restore failed / nsec invalid).
+                if s.auth != .loggedOut || s.router.defaultScreen != .login {
+                    isRestoringSession = false
+                }
+            }
         case .accountCreated(_, let nsec, _, _):
             // Required by spec-v2: native stores nsec; Rust never persists it.
             if !nsec.isEmpty {

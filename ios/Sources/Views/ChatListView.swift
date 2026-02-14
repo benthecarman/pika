@@ -44,7 +44,10 @@ struct ChatListView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+
+                Spacer(minLength: 0)
             }
+            .contentShape(Rectangle())
 
             Button {
                 onOpenChat(chat.chatId)

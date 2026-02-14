@@ -9,6 +9,9 @@ struct ContentView: View {
         let appState = manager.state
         let router = appState.router
         Group {
+            if manager.isRestoringSession {
+                LoadingView()
+            } else {
             switch router.defaultScreen {
             case .login:
                 LoginView(
@@ -40,6 +43,7 @@ struct ContentView: View {
                         manager.dispatch(.updateScreenStack(stack: new))
                     }
                 }
+            }
             }
         }
         .overlay(alignment: .top) {

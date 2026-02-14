@@ -11,47 +11,83 @@ struct LoginView: View {
         let loginBusy = state.loggingIn
         let anyBusy = createBusy || loginBusy
 
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
+            Spacer()
+
+            Image("PikaLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 140, height: 140)
+                .clipShape(RoundedRectangle(cornerRadius: 28))
+
             Text("Pika")
-                .font(.largeTitle.weight(.semibold))
+                .font(.largeTitle.weight(.bold))
+                .padding(.top, 16)
 
-            Button {
-                onCreateAccount()
-            } label: {
-                if createBusy {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    Text("Create Account")
+            Text("Encrypted messaging over Nostr")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+
+            Spacer()
+
+            VStack(spacing: 12) {
+                Button {
+                    onCreateAccount()
+                } label: {
+                    if createBusy {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Create Account")
+                            .frame(maxWidth: .infinity)
+                    }
                 }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(anyBusy)
-            .accessibilityIdentifier(TestIds.loginCreateAccount)
-
-            Divider().padding(.vertical, 8)
-
-            TextField("nsec (mock)", text: $nsecInput)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled(anyBusy)
-                .accessibilityIdentifier(TestIds.loginNsecInput)
+                .accessibilityIdentifier(TestIds.loginCreateAccount)
 
-            Button {
-                onLogin(nsecInput)
-            } label: {
-                if loginBusy {
-                    ProgressView()
-                } else {
-                    Text("Login")
+                HStack {
+                    Rectangle()
+                        .frame(height: 1)
+                        .foregroundStyle(.quaternary)
+                    Text("or")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Rectangle()
+                        .frame(height: 1)
+                        .foregroundStyle(.quaternary)
                 }
+                .padding(.vertical, 4)
+
+                TextField("Enter your nsec", text: $nsecInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(anyBusy)
+                    .accessibilityIdentifier(TestIds.loginNsecInput)
+
+                Button {
+                    onLogin(nsecInput)
+                } label: {
+                    if loginBusy {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Log In")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(anyBusy || nsecInput.isEmpty)
+                .accessibilityIdentifier(TestIds.loginSubmit)
             }
-            .buttonStyle(.bordered)
-            .disabled(anyBusy)
-            .accessibilityIdentifier(TestIds.loginSubmit)
+            .padding(.bottom, 32)
         }
-        .padding(20)
+        .padding(.horizontal, 28)
     }
 }
 
