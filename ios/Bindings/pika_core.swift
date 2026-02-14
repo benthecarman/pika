@@ -689,11 +689,12 @@ public struct AppState: Equatable, Hashable {
     public var chatList: [ChatSummary]
     public var currentChat: ChatViewState?
     public var followList: [FollowListEntry]
+    public var peerProfile: PeerProfileState?
     public var toast: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(rev: UInt64, router: Router, auth: AuthState, myProfile: MyProfileState, busy: BusyState, chatList: [ChatSummary], currentChat: ChatViewState?, followList: [FollowListEntry], toast: String?) {
+    public init(rev: UInt64, router: Router, auth: AuthState, myProfile: MyProfileState, busy: BusyState, chatList: [ChatSummary], currentChat: ChatViewState?, followList: [FollowListEntry], peerProfile: PeerProfileState?, toast: String?) {
         self.rev = rev
         self.router = router
         self.auth = auth
@@ -702,6 +703,7 @@ public struct AppState: Equatable, Hashable {
         self.chatList = chatList
         self.currentChat = currentChat
         self.followList = followList
+        self.peerProfile = peerProfile
         self.toast = toast
     }
 
@@ -729,6 +731,7 @@ public struct FfiConverterTypeAppState: FfiConverterRustBuffer {
                 chatList: FfiConverterSequenceTypeChatSummary.read(from: &buf), 
                 currentChat: FfiConverterOptionTypeChatViewState.read(from: &buf), 
                 followList: FfiConverterSequenceTypeFollowListEntry.read(from: &buf), 
+                peerProfile: FfiConverterOptionTypePeerProfileState.read(from: &buf), 
                 toast: FfiConverterOptionString.read(from: &buf)
         )
     }
@@ -742,6 +745,7 @@ public struct FfiConverterTypeAppState: FfiConverterRustBuffer {
         FfiConverterSequenceTypeChatSummary.write(value.chatList, into: &buf)
         FfiConverterOptionTypeChatViewState.write(value.currentChat, into: &buf)
         FfiConverterSequenceTypeFollowListEntry.write(value.followList, into: &buf)
+        FfiConverterOptionTypePeerProfileState.write(value.peerProfile, into: &buf)
         FfiConverterOptionString.write(value.toast, into: &buf)
     }
 }
@@ -1364,6 +1368,76 @@ public func FfiConverterTypeMyProfileState_lower(_ value: MyProfileState) -> Rus
 }
 
 
+public struct PeerProfileState: Equatable, Hashable {
+    public var pubkey: String
+    public var npub: String
+    public var name: String?
+    public var about: String?
+    public var pictureUrl: String?
+    public var isFollowed: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(pubkey: String, npub: String, name: String?, about: String?, pictureUrl: String?, isFollowed: Bool) {
+        self.pubkey = pubkey
+        self.npub = npub
+        self.name = name
+        self.about = about
+        self.pictureUrl = pictureUrl
+        self.isFollowed = isFollowed
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension PeerProfileState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePeerProfileState: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PeerProfileState {
+        return
+            try PeerProfileState(
+                pubkey: FfiConverterString.read(from: &buf), 
+                npub: FfiConverterString.read(from: &buf), 
+                name: FfiConverterOptionString.read(from: &buf), 
+                about: FfiConverterOptionString.read(from: &buf), 
+                pictureUrl: FfiConverterOptionString.read(from: &buf), 
+                isFollowed: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PeerProfileState, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.pubkey, into: &buf)
+        FfiConverterString.write(value.npub, into: &buf)
+        FfiConverterOptionString.write(value.name, into: &buf)
+        FfiConverterOptionString.write(value.about, into: &buf)
+        FfiConverterOptionString.write(value.pictureUrl, into: &buf)
+        FfiConverterBool.write(value.isFollowed, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePeerProfileState_lift(_ buf: RustBuffer) throws -> PeerProfileState {
+    return try FfiConverterTypePeerProfileState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePeerProfileState_lower(_ value: PeerProfileState) -> RustBuffer {
+    return FfiConverterTypePeerProfileState.lower(value)
+}
+
+
 public struct Router: Equatable, Hashable {
     public var defaultScreen: Screen
     public var screenStack: [Screen]
@@ -1459,7 +1533,14 @@ public enum AppAction: Equatable, Hashable {
     )
     case clearToast
     case foregrounded
+    case openPeerProfile(pubkey: String
+    )
+    case closePeerProfile
     case refreshFollowList
+    case followUser(pubkey: String
+    )
+    case unfollowUser(pubkey: String
+    )
 
 
 
@@ -1539,7 +1620,18 @@ public struct FfiConverterTypeAppAction: FfiConverterRustBuffer {
         
         case 21: return .foregrounded
         
-        case 22: return .refreshFollowList
+        case 22: return .openPeerProfile(pubkey: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 23: return .closePeerProfile
+        
+        case 24: return .refreshFollowList
+        
+        case 25: return .followUser(pubkey: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 26: return .unfollowUser(pubkey: try FfiConverterString.read(from: &buf)
+        )
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1659,9 +1751,28 @@ public struct FfiConverterTypeAppAction: FfiConverterRustBuffer {
             writeInt(&buf, Int32(21))
         
         
-        case .refreshFollowList:
+        case let .openPeerProfile(pubkey):
             writeInt(&buf, Int32(22))
+            FfiConverterString.write(pubkey, into: &buf)
+            
         
+        case .closePeerProfile:
+            writeInt(&buf, Int32(23))
+        
+        
+        case .refreshFollowList:
+            writeInt(&buf, Int32(24))
+        
+        
+        case let .followUser(pubkey):
+            writeInt(&buf, Int32(25))
+            FfiConverterString.write(pubkey, into: &buf)
+            
+        
+        case let .unfollowUser(pubkey):
+            writeInt(&buf, Int32(26))
+            FfiConverterString.write(pubkey, into: &buf)
+            
         }
     }
 }
@@ -2203,6 +2314,30 @@ fileprivate struct FfiConverterOptionTypeChatViewState: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeChatViewState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypePeerProfileState: FfiConverterRustBuffer {
+    typealias SwiftType = PeerProfileState?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypePeerProfileState.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypePeerProfileState.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }

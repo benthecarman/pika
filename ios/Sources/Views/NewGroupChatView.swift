@@ -81,15 +81,26 @@ struct NewGroupChatView: View {
                 }
             } else {
                 Section {
-                    ForEach(filteredFollowList, id: \.pubkey) { entry in
-                        Button {
-                            toggleSelection(npub: entry.npub)
-                        } label: {
-                            followListRow(entry: entry)
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(filteredFollowList, id: \.pubkey) { entry in
+                                Button {
+                                    toggleSelection(npub: entry.npub)
+                                } label: {
+                                    followListRow(entry: entry)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isLoading)
+                                if entry.pubkey != filteredFollowList.last?.pubkey {
+                                    Divider()
+                                }
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isLoading)
                     }
+                    .scrollBounceBehavior(.always)
+                    .frame(maxHeight: 300)
                 } header: {
                     if state.isFetchingFollowList {
                         HStack(spacing: 6) {
