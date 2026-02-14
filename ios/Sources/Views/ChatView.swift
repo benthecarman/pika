@@ -641,23 +641,65 @@ private struct PikaHtmlFullScreen: View {
     let html: String
     let onSendMessage: @MainActor (String) -> Void
     @Binding var isPresented: Bool
-    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                PikaWebView(html: html, contentHeight: $contentHeight, onSendMessage: onSendMessage)
-                    .frame(height: contentHeight)
-            }
-            .navigationTitle("HTML")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { isPresented = false }
+            PikaFullScreenWebView(html: html, onSendMessage: onSendMessage)
+                .navigationTitle("HTML")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { isPresented = false }
+                    }
                 }
-            }
         }
     }
+}
+
+private struct PikaFullScreenWebView: UIViewRepresentable {
+    let html: String
+    let onSendMessage: @MainActor (String) -> Void
+
+    func makeCoordinator() -> PikaWebView.Coordinator {
+        PikaWebView.Coordinator(onSendMessage: onSendMessage)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        let userContentController = WKUserContentController()
+        userContentController.add(context.coordinator, name: "pikaSend")
+
+        let bridgeScript = WKUserScript(
+            source: "window.pika = { send: function(text) { window.webkit.messageHandlers.pikaSend.postMessage(text); } };",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        userContentController.addUserScript(bridgeScript)
+        config.userContentController = userContentController
+
+        let webView = WKWebView(frame: .zero, configuration: config)
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.navigationDelegate = context.coordinator
+
+        let wrapped = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+        <style>
+        :root { color-scheme: light dark; }
+        body { margin: 8px; font-family: -apple-system, sans-serif; background: transparent; }
+        </style>
+        </head>
+        <body>\(html)</body>
+        </html>
+        """
+        webView.loadHTMLString(wrapped, baseURL: nil)
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {}
 }
 
 private struct PikaWebView: UIViewRepresentable {
@@ -667,7 +709,7 @@ private struct PikaWebView: UIViewRepresentable {
     var interactive: Bool = true
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+        Coordinator(onSendMessage: onSendMessage)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -690,7 +732,14 @@ private struct PikaWebView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.isUserInteractionEnabled = interactive
         webView.navigationDelegate = context.coordinator
-        context.coordinator.observe(webView)
+
+        let binding = $contentHeight
+        context.coordinator.onHeightChange = { height in
+            Task { @MainActor in
+                binding.wrappedValue = height
+            }
+        }
+        context.coordinator.observeContentSize(webView)
 
         let wrapped = """
         <!DOCTYPE html>
@@ -712,28 +761,32 @@ private struct PikaWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {}
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-        let parent: PikaWebView
+        let onSendMessage: @MainActor (String) -> Void
+        var onHeightChange: ((CGFloat) -> Void)?
         private var observation: NSKeyValueObservation?
 
-        init(parent: PikaWebView) {
-            self.parent = parent
+        init(onSendMessage: @escaping @MainActor (String) -> Void) {
+            self.onSendMessage = onSendMessage
         }
 
-        func observe(_ webView: WKWebView) {
+        func observeContentSize(_ webView: WKWebView) {
             observation = webView.scrollView.observe(\.contentSize, options: .new) { [weak self] _, change in
                 if let size = change.newValue, size.height > 0 {
-                    Task { @MainActor in
-                        self?.parent.contentHeight = size.height
-                    }
+                    self?.onHeightChange?(size.height)
                 }
             }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            if message.name == "pikaSend", let text = message.body as? String {
-                Task { @MainActor in
-                    parent.onSendMessage(text)
+            switch message.name {
+            case "pikaSend":
+                if let text = message.body as? String {
+                    Task { @MainActor in
+                        onSendMessage(text)
+                    }
                 }
+            default:
+                break
             }
         }
 
