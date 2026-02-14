@@ -690,10 +690,8 @@ private struct PikaWebView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         webView.isUserInteractionEnabled = interactive
         webView.navigationDelegate = context.coordinator
-        return webView
-    }
+        context.coordinator.observe(webView)
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
         let wrapped = """
         <!DOCTYPE html>
         <html>
@@ -708,29 +706,33 @@ private struct PikaWebView: UIViewRepresentable {
         </html>
         """
         webView.loadHTMLString(wrapped, baseURL: nil)
+        return webView
     }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {}
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let parent: PikaWebView
+        private var observation: NSKeyValueObservation?
 
         init(parent: PikaWebView) {
             self.parent = parent
+        }
+
+        func observe(_ webView: WKWebView) {
+            observation = webView.scrollView.observe(\.contentSize, options: .new) { [weak self] _, change in
+                if let size = change.newValue, size.height > 0 {
+                    Task { @MainActor in
+                        self?.parent.contentHeight = size.height
+                    }
+                }
+            }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "pikaSend", let text = message.body as? String {
                 Task { @MainActor in
                     parent.onSendMessage(text)
-                }
-            }
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            webView.evaluateJavaScript("document.body.scrollHeight") { [weak self] result, _ in
-                if let height = result as? CGFloat {
-                    Task { @MainActor in
-                        self?.parent.contentHeight = height
-                    }
                 }
             }
         }
