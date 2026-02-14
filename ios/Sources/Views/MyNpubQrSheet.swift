@@ -21,6 +21,10 @@ struct MyNpubQrSheet: View {
     @State private var nameDraft = ""
     @State private var aboutDraft = ""
     @State private var didSyncDrafts = false
+    @State private var didCopyNpub = false
+    @State private var didCopyNsec = false
+    @State private var npubCopyResetTask: Task<Void, Never>?
+    @State private var nsecCopyResetTask: Task<Void, Never>?
 
     init(
         npub: String,
@@ -92,17 +96,22 @@ struct MyNpubQrSheet: View {
     @ViewBuilder
     private var npubSection: some View {
         Section {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 Text(npub)
                     .font(.system(.footnote, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .accessibilityIdentifier(TestIds.chatListMyNpubValue)
+
                 Spacer()
-                Button("Copy") {
-                    UIPasteboard.general.string = npub
+
+                copyAccessory(
+                    copied: didCopyNpub,
+                    testId: TestIds.chatListMyNpubCopy,
+                    accessibilityLabel: didCopyNpub ? "Copied npub" : "Copy npub"
+                ) {
+                    copyToClipboard(npub, kind: .npub)
                 }
-                .accessibilityIdentifier(TestIds.chatListMyNpubCopy)
             }
         } header: {
             Text("Public Key")
@@ -159,10 +168,16 @@ struct MyNpubQrSheet: View {
             }
             .accessibilityIdentifier(TestIds.myNpubNsecValue)
 
-            Button("Copy nsec") {
-                UIPasteboard.general.string = nsec
+            HStack {
+                Spacer()
+                copyAccessory(
+                    copied: didCopyNsec,
+                    testId: TestIds.myNpubNsecCopy,
+                    accessibilityLabel: didCopyNsec ? "Copied nsec" : "Copy nsec"
+                ) {
+                    copyToClipboard(nsec, kind: .nsec)
+                }
             }
-            .accessibilityIdentifier(TestIds.myNpubNsecCopy)
         } header: {
             Text("Private Key (nsec)")
         } footer: {
@@ -217,6 +232,10 @@ struct MyNpubQrSheet: View {
             .onChange(of: profile) { _, _ in
                 syncDraftsIfNeeded(force: !hasProfileChanges)
             }
+            .onDisappear {
+                npubCopyResetTask?.cancel()
+                nsecCopyResetTask?.cancel()
+            }
             .confirmationDialog("Log out?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
                 Button("Log out", role: .destructive) {
                     onLogout()
@@ -235,6 +254,59 @@ struct MyNpubQrSheet: View {
             aboutDraft = profile.about
             didSyncDrafts = true
         }
+    }
+
+    private enum CopyKind {
+        case npub
+        case nsec
+    }
+
+    @MainActor
+    private func copyToClipboard(_ value: String, kind: CopyKind) {
+        UIPasteboard.general.string = value
+
+        switch kind {
+        case .npub:
+            didCopyNpub = true
+            npubCopyResetTask?.cancel()
+            npubCopyResetTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                didCopyNpub = false
+            }
+        case .nsec:
+            didCopyNsec = true
+            nsecCopyResetTask?.cancel()
+            nsecCopyResetTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                didCopyNsec = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func copyAccessory(
+        copied: Bool,
+        testId: String,
+        accessibilityLabel: String,
+        onCopy: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            if copied {
+                Text("Copied")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+            }
+
+            Button(action: onCopy) {
+                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                    .font(.body.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityIdentifier(testId)
+            .accessibilityLabel(accessibilityLabel)
+        }
+        .animation(.easeInOut(duration: 0.15), value: copied)
     }
 
     private func handlePhotoSelection(_ item: PhotosPickerItem?) {

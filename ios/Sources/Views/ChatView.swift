@@ -26,9 +26,8 @@ struct ChatView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     LazyVStack(spacing: 8) {
-                        ForEach(chat.messages, id: \.id) { msg in
-                            MessageRow(message: msg, showSender: chat.isGroup, onSendMessage: onSendMessage)
-                                .id(msg.id)
+                        ForEach(groupedMessages(chat)) { group in
+                            MessageGroupRow(group: group, showSender: chat.isGroup, onSendMessage: onSendMessage)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -92,6 +91,34 @@ struct ChatView: View {
             return chat.groupName ?? "Group"
         }
         return chat.members.first?.name ?? chat.members.first?.npub ?? ""
+    }
+
+    private func groupedMessages(_ chat: ChatViewState) -> [GroupedChatMessage] {
+        let membersByPubkey = Dictionary(uniqueKeysWithValues: chat.members.map { ($0.pubkey, $0) })
+        var groups: [GroupedChatMessage] = []
+
+        for message in chat.messages {
+            if let lastIndex = groups.indices.last,
+               groups[lastIndex].senderPubkey == message.senderPubkey,
+               groups[lastIndex].isMine == message.isMine {
+                groups[lastIndex].messages.append(message)
+                continue
+            }
+
+            let member = membersByPubkey[message.senderPubkey]
+            groups.append(
+                GroupedChatMessage(
+                    senderPubkey: message.senderPubkey,
+                    senderName: message.senderName ?? member?.name,
+                    senderNpub: member?.npub ?? message.senderPubkey,
+                    senderPictureUrl: member?.pictureUrl,
+                    isMine: message.isMine,
+                    messages: [message]
+                )
+            )
+        }
+
+        return groups
     }
 
     private func sendMessage() {
@@ -267,61 +294,214 @@ private func parseMessageSegments(_ content: String) -> [MessageSegment] {
     return segments
 }
 
-// MARK: - Message row
+// MARK: - Message grouping
 
-private struct MessageRow: View {
-    let message: ChatMessage
+private struct GroupedChatMessage: Identifiable {
+    let senderPubkey: String
+    let senderName: String?
+    let senderNpub: String
+    let senderPictureUrl: String?
+    let isMine: Bool
+    var messages: [ChatMessage]
+
+    var id: String { messages.first?.id ?? senderPubkey }
+}
+
+private enum GroupedBubblePosition {
+    case single
+    case first
+    case middle
+    case last
+}
+
+private struct MessageGroupRow: View {
+    let group: GroupedChatMessage
     var showSender: Bool = false
     let onSendMessage: @MainActor (String) -> Void
 
+    private let avatarSize: CGFloat = 24
+    private let avatarGutterWidth: CGFloat = 28
+
     var body: some View {
-        HStack {
-            if message.isMine { Spacer(minLength: 0) }
-            VStack(alignment: message.isMine ? .trailing : .leading, spacing: 3) {
-                if showSender && !message.isMine {
-                    Text(message.senderName ?? String(message.senderPubkey.prefix(8)))
+        Group {
+            if group.isMine {
+                outgoingRow
+            } else {
+                incomingRow
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var incomingRow: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            AvatarView(
+                name: group.senderName,
+                npub: group.senderNpub,
+                pictureUrl: group.senderPictureUrl,
+                size: avatarSize
+            )
+            .frame(width: avatarGutterWidth, alignment: .leading)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                if showSender {
+                    Text(displaySenderName)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
+                MessageBubbleStack(group: group, onSendMessage: onSendMessage)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-                let segments = parseMessageSegments(message.displayContent)
-                ForEach(segments) { segment in
-                    switch segment {
-                    case .markdown(let text):
-                        Markdown(text)
-                            .markdownTheme(message.isMine ? .pikaOutgoing : .pikaIncoming)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(message.isMine ? Color.blue : Color.gray.opacity(0.2))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                    case .pikaPrompt(let prompt):
-                        PikaPromptView(prompt: prompt, onSelect: onSendMessage)
-                    }
-                }
-                .contextMenu {
-                    Button {
-                        UIPasteboard.general.string = message.displayContent
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                }
+            Spacer(minLength: 24)
+        }
+    }
 
-                if message.isMine {
-                    Text(deliveryText(message.delivery))
+    private var outgoingRow: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            Spacer(minLength: 24)
+
+            VStack(alignment: .trailing, spacing: 3) {
+                MessageBubbleStack(group: group, onSendMessage: onSendMessage)
+                if let delivery = group.messages.last?.delivery {
+                    Text(deliveryText(delivery))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
-            if !message.isMine { Spacer(minLength: 0) }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
-    private func deliveryText(_ d: MessageDeliveryState) -> String {
-        switch d {
-        case .pending: return "Pending"
-        case .sent: return "Sent"
-        case .failed(let reason): return "Failed: \(reason)"
+    private var displaySenderName: String {
+        if let name = group.senderName, !name.isEmpty {
+            return name
         }
+        if group.senderNpub.count <= 12 { return group.senderNpub }
+        return String(group.senderNpub.prefix(12)) + "..."
+    }
+}
+
+private struct MessageBubbleStack: View {
+    let group: GroupedChatMessage
+    let onSendMessage: @MainActor (String) -> Void
+
+    var body: some View {
+        VStack(alignment: group.isMine ? .trailing : .leading, spacing: 2) {
+            ForEach(Array(group.messages.enumerated()), id: \.element.id) { index, message in
+                MessageBubble(
+                    message: message,
+                    position: bubblePosition(at: index, count: group.messages.count),
+                    onSendMessage: onSendMessage
+                )
+                .id(message.id)
+            }
+        }
+    }
+
+    private func bubblePosition(at index: Int, count: Int) -> GroupedBubblePosition {
+        guard count > 1 else { return .single }
+        if index == 0 { return .first }
+        if index == count - 1 { return .last }
+        return .middle
+    }
+}
+
+private struct MessageBubble: View {
+    let message: ChatMessage
+    let position: GroupedBubblePosition
+    let onSendMessage: @MainActor (String) -> Void
+
+    private let roundedCornerRadius: CGFloat = 16
+    private let groupedCornerRadius: CGFloat = 6
+
+    var body: some View {
+        let segments = parseMessageSegments(message.displayContent)
+        ForEach(segments) { segment in
+            switch segment {
+            case .markdown(let text):
+                markdownBubble(text: text)
+            case .pikaPrompt(let prompt):
+                PikaPromptView(prompt: prompt, onSelect: onSendMessage)
+            }
+        }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = message.displayContent
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+    }
+
+    private func markdownBubble(text: String) -> some View {
+        VStack(alignment: message.isMine ? .trailing : .leading, spacing: 3) {
+            Markdown(text)
+                .markdownTheme(message.isMine ? .pikaOutgoing : .pikaIncoming)
+                .multilineTextAlignment(message.isMine ? .trailing : .leading)
+
+            Text(timestampText)
+                .font(.caption2)
+                .foregroundStyle(message.isMine ? Color.white.opacity(0.78) : Color.secondary.opacity(0.9))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+        .background(message.isMine ? Color.blue : Color.gray.opacity(0.2))
+        .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleRadii, style: .continuous))
+    }
+
+    private var timestampText: String {
+        Date(timeIntervalSince1970: TimeInterval(message.timestamp))
+            .formatted(date: .omitted, time: .shortened)
+    }
+
+    private var bubbleRadii: RectangleCornerRadii {
+        if message.isMine {
+            return .init(
+                topLeading: roundedCornerRadius,
+                bottomLeading: roundedCornerRadius,
+                bottomTrailing: tailRadius(for: .bottom),
+                topTrailing: tailRadius(for: .top)
+            )
+        }
+        return .init(
+            topLeading: tailRadius(for: .top),
+            bottomLeading: tailRadius(for: .bottom),
+            bottomTrailing: roundedCornerRadius,
+            topTrailing: roundedCornerRadius
+        )
+    }
+
+    private enum TailEdge {
+        case top
+        case bottom
+    }
+
+    private func tailRadius(for edge: TailEdge) -> CGFloat {
+        switch (position, edge) {
+        case (.single, _):
+            return roundedCornerRadius
+        case (.first, .top):
+            return roundedCornerRadius
+        case (.first, .bottom):
+            return groupedCornerRadius
+        case (.middle, _):
+            return groupedCornerRadius
+        case (.last, .top):
+            return groupedCornerRadius
+        case (.last, .bottom):
+            return roundedCornerRadius
+        }
+    }
+}
+
+private func deliveryText(_ d: MessageDeliveryState) -> String {
+    switch d {
+    case .pending: return "Pending"
+    case .sent: return "Sent"
+    case .failed(let reason): return "Failed: \(reason)"
     }
 }
 
@@ -381,6 +561,72 @@ extension Theme {
 }
 
 #if DEBUG
+private enum ChatViewPreviewData {
+    static let incomingGroup = GroupedChatMessage(
+        senderPubkey: PreviewAppState.samplePeerPubkey,
+        senderName: "Anthony",
+        senderNpub: PreviewAppState.samplePeerNpub,
+        senderPictureUrl: "https://blossom.nostr.pub/8dbc6f42ea8bf53f4af89af87eb0d9110fcaf4d263f7d2cb9f29d68f95f6f8ce",
+        isMine: false,
+        messages: [
+            ChatMessage(
+                id: "incoming-1",
+                senderPubkey: PreviewAppState.samplePeerPubkey,
+                senderName: "Anthony",
+                content: "First incoming bubble in a grouped run.",
+                displayContent: "First incoming bubble in a grouped run.",
+                mentions: [],
+                timestamp: 1_709_100_001,
+                isMine: false,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "incoming-2",
+                senderPubkey: PreviewAppState.samplePeerPubkey,
+                senderName: "Anthony",
+                content: "Second message should visually join with the first.",
+                displayContent: "Second message should visually join with the first.",
+                mentions: [],
+                timestamp: 1_709_100_002,
+                isMine: false,
+                delivery: .sent
+            ),
+        ]
+    )
+
+    static let outgoingGroup = GroupedChatMessage(
+        senderPubkey: PreviewAppState.samplePubkey,
+        senderName: nil,
+        senderNpub: PreviewAppState.sampleNpub,
+        senderPictureUrl: nil,
+        isMine: true,
+        messages: [
+            ChatMessage(
+                id: "outgoing-1",
+                senderPubkey: PreviewAppState.samplePubkey,
+                senderName: nil,
+                content: "I can meet outside in five.",
+                displayContent: "I can meet outside in five.",
+                mentions: [],
+                timestamp: 1_709_100_010,
+                isMine: true,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "outgoing-2",
+                senderPubkey: PreviewAppState.samplePubkey,
+                senderName: nil,
+                content: "If you're near ana's market, I'll find you.",
+                displayContent: "If you're near ana's market, I'll find you.",
+                mentions: [],
+                timestamp: 1_709_100_011,
+                isMine: true,
+                delivery: .pending
+            ),
+        ]
+    )
+}
+
 #Preview("Chat") {
     NavigationStack {
         ChatView(
@@ -419,5 +665,25 @@ extension Theme {
             onSendMessage: { _ in }
         )
     }
+}
+
+#Preview("Chat - Grouped") {
+    NavigationStack {
+        ChatView(
+            chatId: "chat-grouped",
+            state: ChatScreenState(chat: PreviewAppState.chatDetailGrouped.currentChat),
+            onSendMessage: { _ in }
+        )
+    }
+}
+
+#Preview("Message Group - Incoming") {
+    MessageGroupRow(group: ChatViewPreviewData.incomingGroup, showSender: true, onSendMessage: { _ in })
+        .padding(16)
+}
+
+#Preview("Message Group - Outgoing") {
+    MessageGroupRow(group: ChatViewPreviewData.outgoingGroup, showSender: true, onSendMessage: { _ in })
+        .padding(16)
 }
 #endif

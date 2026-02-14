@@ -296,9 +296,13 @@ fi
 
 just ios-build-sim
 
-app_path="ios/build/Debug-iphonesimulator/Pika.app"
+app_path="ios/build/Build/Products/Debug-iphonesimulator/Pika.app"
 if [ ! -d "$app_path" ]; then
-  echo "error: missing built app at $app_path" >&2
+  # Backward-compatible fallback for older local build layouts.
+  app_path="ios/build/Debug-iphonesimulator/Pika.app"
+fi
+if [ ! -d "$app_path" ]; then
+  echo "error: missing built app at ios/build/Build/Products/Debug-iphonesimulator/Pika.app" >&2
   exit 1
 fi
 

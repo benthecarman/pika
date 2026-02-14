@@ -177,6 +177,16 @@ enum PreviewAppState {
         )
     }
 
+    static var chatDetailGrouped: AppState {
+        base(
+            rev: 34,
+            router: Router(defaultScreen: .chat(chatId: "chat-grouped"), screenStack: [.chat(chatId: "chat-grouped")]),
+            auth: .loggedIn(npub: sampleNpub, pubkey: samplePubkey),
+            myProfile: sampleProfile,
+            currentChat: chatViewStateGrouped()
+        )
+    }
+
     static var toastVisible: AppState {
         base(
             rev: 40,
@@ -299,10 +309,117 @@ enum PreviewAppState {
         )
     }
 
+    private static func chatViewStateGrouped() -> ChatViewState {
+        let messages: [ChatMessage] = [
+            ChatMessage(
+                id: "gm1",
+                senderPubkey: samplePeerPubkey,
+                senderName: "Anthony",
+                content: "hello",
+                displayContent: "hello",
+                mentions: [],
+                timestamp: 1_709_001_000,
+                isMine: false,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "gm2",
+                senderPubkey: samplePeerPubkey,
+                senderName: "Anthony",
+                content: "how are you",
+                displayContent: "how are you",
+                mentions: [],
+                timestamp: 1_709_001_005,
+                isMine: false,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "gm3",
+                senderPubkey: samplePubkey,
+                senderName: nil,
+                content: "lmk when you are here and I will find you",
+                displayContent: "lmk when you are here and I will find you",
+                mentions: [],
+                timestamp: 1_709_001_020,
+                isMine: true,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "gm4",
+                senderPubkey: samplePubkey,
+                senderName: nil,
+                content: "I am out by ana's market",
+                displayContent: "I am out by ana's market",
+                mentions: [],
+                timestamp: 1_709_001_030,
+                isMine: true,
+                delivery: .pending
+            ),
+            ChatMessage(
+                id: "gm5",
+                senderPubkey: sampleThirdPubkey,
+                senderName: "benthecarman",
+                content: "We got locked out",
+                displayContent: "We got locked out",
+                mentions: [],
+                timestamp: 1_709_001_040,
+                isMine: false,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "gm6",
+                senderPubkey: sampleThirdPubkey,
+                senderName: "benthecarman",
+                content: "Nvm",
+                displayContent: "Nvm",
+                mentions: [],
+                timestamp: 1_709_001_045,
+                isMine: false,
+                delivery: .sent
+            ),
+            ChatMessage(
+                id: "gm7",
+                senderPubkey: samplePeerPubkey,
+                senderName: "Anthony",
+                content: "https://raw.githubusercontent.com/shabegom/buttons/refs/heads/main/README.md",
+                displayContent: "https://raw.githubusercontent.com/shabegom/buttons/refs/heads/main/README.md",
+                mentions: [],
+                timestamp: 1_709_001_080,
+                isMine: false,
+                delivery: .sent
+            ),
+        ]
+
+        return ChatViewState(
+            chatId: "chat-grouped",
+            isGroup: true,
+            groupName: "hackathon2",
+            members: [
+                MemberInfo(
+                    pubkey: samplePeerPubkey,
+                    npub: samplePeerNpub,
+                    name: "Anthony",
+                    pictureUrl: "https://blossom.nostr.pub/8dbc6f42ea8bf53f4af89af87eb0d9110fcaf4d263f7d2cb9f29d68f95f6f8ce"
+                ),
+                MemberInfo(
+                    pubkey: sampleThirdPubkey,
+                    npub: sampleThirdNpub,
+                    name: "benthecarman",
+                    pictureUrl: nil
+                ),
+            ],
+            isAdmin: true,
+            messages: messages,
+            canLoadOlder: true
+        )
+    }
+
     static let sampleNpub = "npub1zxu639qym0esxnn7rzrt48wycmfhdu3e5yvzwx7ja3t84zyc2r8qz8cx2y"
     static let samplePubkey = "11b9a894813efe60d39f8621ae9dc4c6d26de4732411c1cdf4bb15e88898a19c"
     static let samplePeerNpub = "npub1y2z0c7un9dwmhk4zrpw8df8p0gh0j2x54qhznwqjnp452ju4078srmwp70"
     static let samplePeerPubkey = "2284fc7b932b5dbbdaa2185c76a4e17a2ef928d4a82e29b812986b454b957f8f"
+    static let sampleThirdNpub = "npub1rtrxx9eyvag0ap3v73c4dvsqq5d2yxwe5d72qxrfpwe5svr96wuqed4p38"
+    static let sampleThirdPubkey = "1f7f5f6d64e8de7184f4ad14a2fdbef674e7dc86d51a0d65704fbfdbb6c42cb7"
     static let sampleProfile = MyProfileState(
         name: "Paul Miller",
         about: "Building Marmot over Nostr.",

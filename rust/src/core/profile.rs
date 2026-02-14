@@ -8,7 +8,7 @@ use crate::state::MyProfileState;
 use super::*;
 
 // TODO: Prefer user-advertised blossom servers (once we ingest and cache them from Nostr).
-const DEFAULT_BLOSSOM_SERVERS: &[&str] = &["https://blossom.nostr.pub", "https://void.cat"];
+const DEFAULT_BLOSSOM_SERVERS: &[&str] = &["https://blossom.yakihonne.com"];
 const MAX_PROFILE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
 impl AppCore {
@@ -62,11 +62,6 @@ impl AppCore {
             self.toast("Network disabled");
             return;
         }
-        if self.my_metadata.is_none() {
-            self.refresh_my_profile(false);
-            self.toast("Profile still loading, try again in a moment");
-            return;
-        }
 
         let metadata = self.metadata_for_profile_edit(name, about);
         let (client, tx) = {
@@ -114,11 +109,6 @@ impl AppCore {
         }
         if !self.network_enabled() {
             self.toast("Network disabled");
-            return;
-        }
-        if self.my_metadata.is_none() {
-            self.refresh_my_profile(false);
-            self.toast("Profile still loading, try again in a moment");
             return;
         }
 
