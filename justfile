@@ -324,6 +324,11 @@ android-ui-e2e:
 # Create + push version tag (vX.Y.Z) after validating VERSION and clean tree.
 release VERSION:
   set -euo pipefail; \
+  branch="$(git rev-parse --abbrev-ref HEAD)"; \
+  if [ "$branch" != "master" ]; then \
+    echo "error: releases must be tagged from master (currently on $branch)"; \
+    exit 1; \
+  fi; \
   release_version="{{VERSION}}"; \
   case "$release_version" in VERSION=*) release_version="${release_version#VERSION=}";; esac; \
   current_version="$(./scripts/version-read --name)"; \

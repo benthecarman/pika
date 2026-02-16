@@ -1,16 +1,30 @@
 ---
-summary: Android release process for signed APK publishing to GitHub Releases
+summary: Release process for Android APK and marmotd (OpenClaw extension)
 read_when:
-  - preparing an Android release tag
+  - preparing an Android or marmotd release
   - rotating Android signing keys or CI release secrets
   - changing release automation in justfile, Gradle, or GitHub Actions
 ---
 
-# Release (Android APK)
+# Release
 
-This repo uses a tag-driven Android release pipeline.
+This repo has two independent release pipelines, both tag-driven:
 
-## Version source of truth
+| Target | Tag pattern | CI workflow | Artifacts |
+|--------|------------|-------------|-----------|
+| Android APK | `v*` (e.g. `v0.2.2`) | `release.yml` | Signed APK + SHA256SUMS on GitHub Releases |
+| marmotd (OpenClaw extension) | `marmotd-v*` (e.g. `marmotd-v0.3.2`) | `marmotd-release.yml` | Linux + macOS binaries on GitHub Releases, npm package |
+
+**Important:** All release tags must be created from the `master` branch. Tags on
+feature branches break GitHub's auto-generated release notes (it diffs between
+tags, and tags on divergent branches include unrelated commits). The `just release`
+recipe enforces this with a branch check.
+
+---
+
+## Android APK
+
+### Version source of truth
 
 - Version lives in `VERSION` (format `x.y.z`).
 - Android reads it in `android/app/build.gradle.kts`.
@@ -21,7 +35,37 @@ This repo uses a tag-driven Android release pipeline.
 
 CI enforces that the pushed tag equals `v$(cat VERSION)`.
 
-## Signing inputs
+### Runbook
+
+```bash
+# 1. Make sure you're on master with a clean tree
+git checkout master
+git pull origin master
+
+# 2. Bump the version
+echo "0.3.0" > VERSION
+git add VERSION
+git commit -m "release: bump to v0.3.0"
+git push origin master
+
+# 3. Tag and push (this triggers the CI release)
+just release 0.3.0
+
+# 4. Monitor the release workflow
+gh run list --limit 1
+gh run watch <run-id>
+
+# 5. Verify the release
+gh release view v0.3.0
+```
+
+`just release` validates:
+- You are on the `master` branch
+- `VERSION` file matches the argument
+- Git working tree is clean
+- Tag does not already exist
+
+### Signing inputs
 
 - Commit only encrypted keystore: `android/pika-release.jks.age`.
 - Commit only encrypted signing env: `secrets/android-signing.env.age`.
@@ -35,20 +79,7 @@ CI enforces that the pushed tag equals `v$(cat VERSION)`.
 - Optional for local hardware-key decrypt:
   - `PIKA_AGE_IDENTITY_FILE` (defaults to `~/configs/yubikeys/keys.txt`)
 
-`just android-release` decrypts the keystore, builds, and writes:
-
-- `dist/pika-<version>-arm64-v8a.apk`
-
-## Release recipes
-
-- `just android-release`
-  - Builds signed release APK (`arm64-v8a`) into `dist/`
-- `just release VERSION=x.y.z`
-  - Verifies clean git tree
-  - Verifies `VERSION` matches argument
-  - Creates and pushes tag `vx.y.z`
-
-## CI workflow
+### CI workflow
 
 `/.github/workflows/release.yml` runs on `push.tags: ["v*"]` and `workflow_dispatch`.
 
@@ -57,3 +88,51 @@ Jobs:
 1. `check` - validates tag/version match and runs `just pre-merge-pika`
 2. `build` - runs `just android-release`, uploads APK + `SHA256SUMS`
 3. `publish` - creates GitHub Release with uploaded assets
+
+---
+
+## marmotd (OpenClaw extension)
+
+marmotd is the Marmot sidecar binary used by the OpenClaw bot. It is released as
+native binaries (Linux x86_64/aarch64, macOS x86_64/aarch64) on GitHub Releases
+and as an npm package.
+
+### Version source of truth
+
+- Rust version: `crates/marmotd/Cargo.toml`
+- npm version: `openclaw-marmot/openclaw/extensions/marmot/package.json`
+
+Both must match. The `bump-marmotd.sh` script keeps them in sync.
+
+### Runbook
+
+```bash
+# 1. Make sure you're on master with a clean tree
+git checkout master
+git pull origin master
+
+# 2. Bump version, commit, and tag (all done by the script)
+./scripts/bump-marmotd.sh 0.4.0
+
+# 3. Push commit and tag (this triggers the CI release)
+git push origin master marmotd-v0.4.0
+
+# 4. Monitor the release workflow
+gh run list --limit 1
+gh run watch <run-id>
+
+# 5. Verify
+gh release view marmotd-v0.4.0
+npm view @openclaw/marmot version
+```
+
+### CI workflow
+
+`/.github/workflows/marmotd-release.yml` runs on `push.tags: ["marmotd-v*"]`.
+
+Jobs:
+
+1. `build-linux` - builds x86_64 and aarch64 Linux binaries
+2. `build-macos` - builds x86_64 and aarch64 macOS binaries
+3. `publish-release` - creates GitHub Release with all binaries
+4. `publish-npm` - publishes the OpenClaw extension to npm (requires `NPM_TOKEN` secret)
