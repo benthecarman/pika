@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Declarative AVD provisioning.
+# Creates the repo's default AVD if it doesn't exist and ensures config.ini
+# matches the settings checked into this script.  Idempotent — safe to call
+# on every emulator launch or from shellHook.
+
+AVD_NAME="${PIKA_ANDROID_AVD_NAME:-pika_api35}"
+AVD_HOME="${ANDROID_AVD_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/android/avd}"
+AVD_DIR="$AVD_HOME/${AVD_NAME}.avd"
+CONFIG="$AVD_DIR/config.ini"
+
+# System image to use.  arm64-v8a for Apple Silicon / aarch64-linux;
+# the flake.nix already selects the matching image per platform.
+if [ "$(uname -m)" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then
+  SYS_IMAGE="system-images;android-35;google_apis;arm64-v8a"
+else
+  SYS_IMAGE="system-images;android-35;google_apis;x86_64"
+fi
+
+# ── Create AVD if missing ────────────────────────────────────────────
+if [ ! -d "$AVD_DIR" ]; then
+  echo "creating android AVD: $AVD_NAME"
+  echo "no" | avdmanager create avd \
+    --name "$AVD_NAME" \
+    --package "$SYS_IMAGE" \
+    --device "pixel" \
+    --force
+fi
+
+# ── Patch config.ini ─────────────────────────────────────────────────
+# Why these keys:
+# - hw.keyboard=yes: host keyboard types into Android text inputs.
+# - hw.mainKeys=yes: enables hardware-style nav key behavior expected by
+#   some emulator setups where side-panel home/back can be unreliable.
+# - hw.dPad=yes: keeps directional input available for QA/navigation cases.
+# We enforce this every run because config.ini is mutable AVD runtime state.
+declare -A WANT=(
+  [hw.keyboard]=yes
+  [hw.mainKeys]=yes
+  [hw.dPad]=yes
+)
+
+changed=0
+for key in "${!WANT[@]}"; do
+  val="${WANT[$key]}"
+  if grep -q "^${key}=" "$CONFIG" 2>/dev/null; then
+    cur="$(grep "^${key}=" "$CONFIG" | head -1 | cut -d= -f2)"
+    if [ "$cur" != "$val" ]; then
+      # portable in-place sed (macOS + GNU)
+      sed -i.bak "s/^${key}=.*/${key}=${val}/" "$CONFIG"
+      rm -f "${CONFIG}.bak"
+      changed=1
+    fi
+  else
+    echo "${key}=${val}" >> "$CONFIG"
+    changed=1
+  fi
+done
+
+if [ "$changed" = "1" ]; then
+  echo "patched $CONFIG (hw.keyboard/mainKeys/dPad → yes)"
+fi

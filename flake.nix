@@ -153,6 +153,17 @@
 
             mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
 
+            # Declarative AVD convergence (runtime state lives outside /nix/store).
+            # Why: AVD config.ini is mutable user state, so flakes cannot "freeze" it.
+            # We converge it on shell entry so emulator behavior is reproducible across
+            # worktrees and machines (notably keyboard input and home/back key handling).
+            export PIKA_ANDROID_AVD_NAME="''${PIKA_ANDROID_AVD_NAME:-pika_api35}"
+            if [ "''${PIKA_ANDROID_AVD_ENSURE_ON_SHELL:-1}" = "1" ] && [ -x "$PWD/tools/android-avd-ensure" ]; then
+              if ! "$PWD/tools/android-avd-ensure"; then
+                echo "warning: android-avd-ensure failed; continuing shell startup" >&2
+              fi
+            fi
+
             # iOS Simulator tooling ("xcrun simctl ...") only exists in a full Xcode install.
             #
             # In Nix shells on macOS it's common for the selected developer dir (via xcode-select)
