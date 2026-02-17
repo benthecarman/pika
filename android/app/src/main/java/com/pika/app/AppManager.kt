@@ -44,6 +44,7 @@ class AppManager private constructor(context: Context) : AppReconciler {
             followList = emptyList(),
             peerProfile = null,
             activeCall = null,
+            callTimeline = emptyList(),
             toast = null,
         ),
     )
@@ -127,6 +128,8 @@ class AppManager private constructor(context: Context) : AppReconciler {
         secureStore.clearNsec()
         rust.dispatch(AppAction.Logout)
     }
+
+    fun getNsec(): String? = secureStore.getNsec()
 
     fun onForeground() {
         // Foreground is a lifecycle signal; Rust owns state changes and side effects.

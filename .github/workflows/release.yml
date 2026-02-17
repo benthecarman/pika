@@ -199,6 +199,7 @@ jobs:
         env:
           AGE_SECRET_KEY: ${{ secrets.AGE_SECRET_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZAPSTORE_SIGN_WITH: ${{ secrets.ZAPSTORE_SIGN_WITH }}
         run: |
           set -euo pipefail
           set +x
