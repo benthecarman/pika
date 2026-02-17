@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   check:
-    if: github.actor == 'justinmoon' || github.actor == 'futurepaul'
+    if: github.actor == 'justinmoon' || github.actor == 'futurepaul' || github.actor == 'AnthonyRonning' || github.actor == 'benthecarman'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
       - run: nix develop .#default -c just pre-merge-pika
 
   build:
-    if: github.actor == 'justinmoon' || github.actor == 'futurepaul'
+    if: github.actor == 'justinmoon' || github.actor == 'futurepaul' || github.actor == 'AnthonyRonning' || github.actor == 'benthecarman'
     needs: check
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -104,7 +104,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.actor == 'justinmoon' || github.actor == 'futurepaul'
+    if: github.actor == 'justinmoon' || github.actor == 'futurepaul' || github.actor == 'AnthonyRonning' || github.actor == 'benthecarman'
     needs: build
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
