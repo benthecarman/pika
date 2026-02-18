@@ -201,15 +201,13 @@ impl DesktopApp {
                         }
 
                         self.state = latest;
-                        let needs_follows =
-                            self.show_new_chat_form || self.show_new_group_form;
+                        let needs_follows = self.show_new_chat_form || self.show_new_group_form;
                         if needs_follows {
                             self.refilter_follows();
                         }
                     }
                     // Retry outside the manager borrow
-                    let needs_follows =
-                        self.show_new_chat_form || self.show_new_group_form;
+                    let needs_follows = self.show_new_chat_form || self.show_new_group_form;
                     if needs_follows
                         && self.state.follow_list.is_empty()
                         && !self.state.busy.fetching_follow_list
@@ -378,8 +376,7 @@ impl DesktopApp {
                 self.clear_all_overlays();
                 self.show_group_info = true;
                 if let Some(chat) = &self.state.current_chat {
-                    self.group_info_name_draft =
-                        chat.group_name.clone().unwrap_or_default();
+                    self.group_info_name_draft = chat.group_name.clone().unwrap_or_default();
                 }
             }
             Message::CloseGroupInfo => {
@@ -444,9 +441,7 @@ impl DesktopApp {
         if let Some(error) = &self.boot_error {
             return container(
                 column![
-                    text("Pika Desktop")
-                        .size(24)
-                        .color(theme::TEXT_PRIMARY),
+                    text("Pika Desktop").size(24).color(theme::TEXT_PRIMARY),
                     text(error).color(theme::DANGER),
                 ]
                 .spacing(12),
@@ -602,11 +597,7 @@ impl DesktopApp {
             self.filtered_follows = source
                 .iter()
                 .filter(|e| {
-                    e.name
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_lowercase()
-                        .contains(&q)
+                    e.name.as_deref().unwrap_or("").to_lowercase().contains(&q)
                         || e.npub.to_lowercase().contains(&q)
                 })
                 .cloned()

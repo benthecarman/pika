@@ -86,9 +86,8 @@ pub fn open_mdk(data_dir: &str, pubkey: &PublicKey, keychain_group: &str) -> Res
     // mock keyring store is in-memory and keys are lost when the process exits.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        return open_mdk_desktop_file_key(data_dir, pubkey).with_context(|| {
-            format!("open encrypted mdk sqlite db: {}", db_path.display())
-        });
+        return open_mdk_desktop_file_key(data_dir, pubkey)
+            .with_context(|| format!("open encrypted mdk sqlite db: {}", db_path.display()));
     }
 
     #[allow(unreachable_code)]
@@ -152,7 +151,7 @@ fn open_mdk_desktop_file_key(data_dir: &str, pubkey: &PublicKey) -> Result<PikaM
 
         let mut k = [0u8; 32];
         OsRng.fill_bytes(&mut k);
-        std::fs::write(&key_path, &k)
+        std::fs::write(&key_path, k)
             .with_context(|| format!("write mdk file key: {}", key_path.display()))?;
         #[cfg(unix)]
         {

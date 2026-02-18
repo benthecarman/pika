@@ -118,18 +118,19 @@ fn member_row<'a>(
     is_admin: bool,
     avatar_cache: &mut super::avatar::AvatarCache,
 ) -> Element<'a, Message, Theme> {
-    let name = member
-        .name
-        .as_deref()
-        .unwrap_or("");
+    let name = member.name.as_deref().unwrap_or("");
     let display_name = if name.is_empty() {
         truncated_npub(&member.npub)
     } else {
         name.to_string()
     };
 
-    let avatar: Element<'_, Message, Theme> =
-        avatar_circle(Some(&display_name), member.picture_url.as_deref(), 36.0, avatar_cache);
+    let avatar: Element<'_, Message, Theme> = avatar_circle(
+        Some(&display_name),
+        member.picture_url.as_deref(),
+        36.0,
+        avatar_cache,
+    );
 
     let label = if is_me {
         format!("{display_name} (You)")
@@ -146,11 +147,7 @@ fn member_row<'a>(
     .align_y(Alignment::Center);
 
     if is_me {
-        row_content = row_content.push(
-            text("Admin")
-                .size(12)
-                .color(theme::TEXT_FADED),
-        );
+        row_content = row_content.push(text("Admin").size(12).color(theme::TEXT_FADED));
     } else if is_admin {
         let pubkey = member.pubkey.clone();
         row_content = row_content.push(
@@ -172,10 +169,7 @@ fn member_row<'a>(
         );
     }
 
-    container(row_content)
-        .width(Fill)
-        .padding([8, 12])
-        .into()
+    container(row_content).width(Fill).padding([8, 12]).into()
 }
 
 fn truncated_npub(npub: &str) -> String {

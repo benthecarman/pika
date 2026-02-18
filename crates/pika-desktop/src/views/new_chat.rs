@@ -18,11 +18,7 @@ pub fn new_chat_view<'a>(
     let mut content = column![].spacing(16).padding([24, 32]).width(Fill);
 
     // ── Header ──────────────────────────────────────────────────────
-    content = content.push(
-        text("New Chat")
-            .size(22)
-            .color(theme::TEXT_PRIMARY),
-    );
+    content = content.push(text("New Chat").size(22).color(theme::TEXT_PRIMARY));
 
     // ── Manual entry ────────────────────────────────────────────────
     let input_row = row![
@@ -33,18 +29,21 @@ pub fn new_chat_view<'a>(
             .width(Fill)
             .style(theme::dark_input_style),
         if creating_chat {
-            button(text("Creating\u{2026}").size(14).color(theme::TEXT_FADED).center())
-                .padding([10, 20])
-                .style(theme::secondary_button_style)
+            button(
+                text("Creating\u{2026}")
+                    .size(14)
+                    .color(theme::TEXT_FADED)
+                    .center(),
+            )
+            .padding([10, 20])
+            .style(theme::secondary_button_style)
         } else {
             button(text("Start Chat").size(14).center())
-                .on_press_maybe(
-                    if new_chat_input.trim().is_empty() {
-                        None
-                    } else {
-                        Some(Message::StartChat)
-                    },
-                )
+                .on_press_maybe(if new_chat_input.trim().is_empty() {
+                    None
+                } else {
+                    Some(Message::StartChat)
+                })
                 .padding([10, 20])
                 .style(theme::primary_button_style)
         },
@@ -89,17 +88,11 @@ pub fn new_chat_view<'a>(
             .padding([20, 0]),
         );
     } else {
-        let list = follow_list
-            .iter()
-            .fold(column![].spacing(2), |col, entry| {
-                col.push(follow_row(entry, creating_chat, avatar_cache))
-            });
+        let list = follow_list.iter().fold(column![].spacing(2), |col, entry| {
+            col.push(follow_row(entry, creating_chat, avatar_cache))
+        });
 
-        content = content.push(
-            scrollable(list)
-                .height(Fill)
-                .width(Fill),
-        );
+        content = content.push(scrollable(list).height(Fill).width(Fill));
     }
 
     container(content)
@@ -122,14 +115,16 @@ fn follow_row<'a>(
         name.to_string()
     };
 
-    let avatar: Element<'_, Message, Theme> =
-        avatar_circle(Some(&display_name), entry.picture_url.as_deref(), 40.0, avatar_cache);
+    let avatar: Element<'_, Message, Theme> = avatar_circle(
+        Some(&display_name),
+        entry.picture_url.as_deref(),
+        40.0,
+        avatar_cache,
+    );
 
-    let mut info = column![
-        text(theme::truncate(&display_name, 30))
-            .size(14)
-            .color(theme::TEXT_PRIMARY),
-    ]
+    let mut info = column![text(theme::truncate(&display_name, 30))
+        .size(14)
+        .color(theme::TEXT_PRIMARY),]
     .spacing(2);
 
     if !name.is_empty() {
@@ -140,15 +135,11 @@ fn follow_row<'a>(
         );
     }
 
-    let row_content = row![avatar, info]
-        .spacing(12)
-        .align_y(Alignment::Center);
+    let row_content = row![avatar, info].spacing(12).align_y(Alignment::Center);
 
     let npub = entry.npub.clone();
-    let mut btn = button(row_content)
-        .width(Fill)
-        .padding([8, 12])
-        .style(|_: &Theme, status: button::Status| {
+    let mut btn = button(row_content).width(Fill).padding([8, 12]).style(
+        |_: &Theme, status: button::Status| {
             let bg = match status {
                 button::Status::Hovered => theme::HOVER_BG,
                 _ => iced::Color::TRANSPARENT,
@@ -159,7 +150,8 @@ fn follow_row<'a>(
                 border: iced::border::rounded(8),
                 ..Default::default()
             }
-        });
+        },
+    );
 
     if !disabled {
         btn = btn.on_press(Message::StartChatWith(npub));

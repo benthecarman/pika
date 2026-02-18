@@ -85,14 +85,15 @@ pub fn chat_rail_view<'a>(
 }
 
 /// A single chat list item row.
-fn chat_item<'a>(chat: &ChatSummary, selected_id: Option<&str>, avatar_cache: &mut super::avatar::AvatarCache) -> Element<'a, Message, Theme> {
+fn chat_item<'a>(
+    chat: &ChatSummary,
+    selected_id: Option<&str>,
+    avatar_cache: &mut super::avatar::AvatarCache,
+) -> Element<'a, Message, Theme> {
     let is_selected = selected_id == Some(chat.chat_id.as_str());
 
     let name = chat_display_name(chat);
-    let preview = chat
-        .last_message
-        .as_deref()
-        .unwrap_or("No messages yet");
+    let preview = chat.last_message.as_deref().unwrap_or("No messages yet");
 
     let timestamp_text: Element<'a, Message, Theme> = if let Some(ts) = chat.last_message_at {
         text(theme::relative_time(ts))
@@ -146,12 +147,9 @@ fn chat_item<'a>(chat: &ChatSummary, selected_id: Option<&str>, avatar_cache: &m
         );
     }
 
-    let content = row![
-        avatar,
-        column![top_row, bottom_row].spacing(2).width(Fill),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    let content = row![avatar, column![top_row, bottom_row].spacing(2).width(Fill),]
+        .spacing(10)
+        .align_y(Alignment::Center);
 
     button(content)
         .on_press(Message::OpenChat(chat.chat_id.clone()))

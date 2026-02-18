@@ -21,19 +21,12 @@ pub fn conversation_view<'a>(
         String::new()
     };
 
-    let mut header_info = column![
-        text(title.clone()).size(16).color(theme::TEXT_PRIMARY),
-    ];
+    let mut header_info = column![text(title.clone()).size(16).color(theme::TEXT_PRIMARY),];
     if !subtitle.is_empty() {
-        header_info = header_info.push(
-            text(subtitle).size(12).color(theme::TEXT_SECONDARY),
-        );
+        header_info = header_info.push(text(subtitle).size(12).color(theme::TEXT_SECONDARY));
     }
 
-    let picture_url = chat
-        .members
-        .first()
-        .and_then(|m| m.picture_url.as_deref());
+    let picture_url = chat.members.first().and_then(|m| m.picture_url.as_deref());
 
     let header_content = row![
         avatar_circle(Some(&*title), picture_url, 36.0, avatar_cache),
@@ -117,15 +110,10 @@ pub fn conversation_view<'a>(
     .style(theme::input_bar_style);
 
     // ── Compose ─────────────────────────────────────────────────────
-    column![
-        header,
-        rule::horizontal(1),
-        message_scroll,
-        input_bar,
-    ]
-    .width(Fill)
-    .height(Fill)
-    .into()
+    column![header, rule::horizontal(1), message_scroll, input_bar,]
+        .width(Fill)
+        .height(Fill)
+        .into()
 }
 
 fn chat_title(chat: &ChatViewState) -> String {

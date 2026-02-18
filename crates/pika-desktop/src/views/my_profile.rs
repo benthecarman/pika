@@ -20,7 +20,11 @@ pub fn my_profile_view<'a>(
         .align_x(Alignment::Center);
 
     // ── Avatar ──────────────────────────────────────────────────────
-    let display_name = if name_draft.is_empty() { "Me" } else { name_draft };
+    let display_name = if name_draft.is_empty() {
+        "Me"
+    } else {
+        name_draft
+    };
     content = content.push(
         container(avatar_circle(
             Some(display_name),
@@ -48,7 +52,10 @@ pub fn my_profile_view<'a>(
 
     // ── About field ─────────────────────────────────────────────────
     let about_row = row![
-        text("About").size(14).color(theme::TEXT_SECONDARY).width(60),
+        text("About")
+            .size(14)
+            .color(theme::TEXT_SECONDARY)
+            .width(60),
         text_input("About\u{2026}", about_draft)
             .on_input(Message::ProfileAboutChanged)
             .padding(10)

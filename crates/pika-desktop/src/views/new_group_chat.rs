@@ -33,11 +33,9 @@ pub fn new_group_chat_view<'a>(
 
     // ── Selected members chips ──────────────────────────────────────
     if !selected_members.is_empty() {
-        let mut chips_row = row![
-            text("Selected:").size(13).color(theme::TEXT_SECONDARY),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
+        let mut chips_row = row![text("Selected:").size(13).color(theme::TEXT_SECONDARY),]
+            .spacing(6)
+            .align_y(Alignment::Center);
 
         for npub in selected_members {
             let label = follow_list
@@ -124,12 +122,15 @@ pub fn new_group_chat_view<'a>(
             .padding([20, 0]),
         );
     } else {
-        let list = follow_list
-            .iter()
-            .fold(column![].spacing(2), |col, entry| {
-                let is_selected = selected_members.contains(&entry.npub);
-                col.push(follow_row_selectable(entry, is_selected, creating_chat, avatar_cache))
-            });
+        let list = follow_list.iter().fold(column![].spacing(2), |col, entry| {
+            let is_selected = selected_members.contains(&entry.npub);
+            col.push(follow_row_selectable(
+                entry,
+                is_selected,
+                creating_chat,
+                avatar_cache,
+            ))
+        });
 
         content = content.push(scrollable(list).height(Fill).width(Fill));
     }
@@ -184,14 +185,16 @@ fn follow_row_selectable<'a>(
 
     let check = if is_selected { "\u{2611}" } else { "\u{2610}" };
 
-    let avatar: Element<'_, Message, Theme> =
-        avatar_circle(Some(&display_name), entry.picture_url.as_deref(), 40.0, avatar_cache);
+    let avatar: Element<'_, Message, Theme> = avatar_circle(
+        Some(&display_name),
+        entry.picture_url.as_deref(),
+        40.0,
+        avatar_cache,
+    );
 
-    let mut info = column![
-        text(theme::truncate(&display_name, 30))
-            .size(14)
-            .color(theme::TEXT_PRIMARY),
-    ]
+    let mut info = column![text(theme::truncate(&display_name, 30))
+        .size(14)
+        .color(theme::TEXT_PRIMARY),]
     .spacing(2);
 
     if !name.is_empty() {
@@ -215,10 +218,8 @@ fn follow_row_selectable<'a>(
     .align_y(Alignment::Center);
 
     let npub = entry.npub.clone();
-    let mut btn = button(row_content)
-        .width(Fill)
-        .padding([8, 12])
-        .style(|_: &Theme, status: button::Status| {
+    let mut btn = button(row_content).width(Fill).padding([8, 12]).style(
+        |_: &Theme, status: button::Status| {
             let bg = match status {
                 button::Status::Hovered => theme::HOVER_BG,
                 _ => iced::Color::TRANSPARENT,
@@ -229,7 +230,8 @@ fn follow_row_selectable<'a>(
                 border: iced::border::rounded(8),
                 ..Default::default()
             }
-        });
+        },
+    );
 
     if !disabled {
         btn = btn.on_press(Message::ToggleGroupMember(npub));
