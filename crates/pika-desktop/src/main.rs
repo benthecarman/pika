@@ -1,14 +1,18 @@
 mod app_manager;
+mod theme;
+mod views;
 
 use app_manager::AppManager;
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Center, Element, Fill, Subscription, Task};
-use pika_core::{AppAction, AppState, AuthState, ChatMessage, ChatSummary};
+use iced::widget::{column, container, row, text, vertical_rule};
+use iced::{Element, Fill, Size, Subscription, Task, Theme};
+use pika_core::{AppAction, AppState, AuthState};
 use std::time::Duration;
 
 pub fn main() -> iced::Result {
-    iced::application("Pika Desktop (ICED)", DesktopApp::update, DesktopApp::view)
+    iced::application("Pika Desktop", DesktopApp::update, DesktopApp::view)
         .subscription(DesktopApp::subscription)
+        .theme(|_| Theme::Dark)
+        .window_size(Size::new(1024.0, 720.0))
         .run_with(DesktopApp::new)
 }
 
@@ -19,10 +23,12 @@ struct DesktopApp {
     nsec_input: String,
     new_chat_input: String,
     message_input: String,
+    show_new_chat_form: bool,
+    selected_chat_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-enum Message {
+pub enum Message {
     Tick,
     NsecChanged(String),
     Login,
@@ -30,6 +36,7 @@ enum Message {
     Logout,
     NewChatChanged(String),
     StartChat,
+    ToggleNewChatForm,
     OpenChat(String),
     MessageChanged(String),
     SendMessage,
@@ -49,6 +56,8 @@ impl DesktopApp {
                         nsec_input: String::new(),
                         new_chat_input: String::new(),
                         message_input: String::new(),
+                        show_new_chat_form: false,
+                        selected_chat_id: None,
                     },
                     Task::none(),
                 )
@@ -61,6 +70,8 @@ impl DesktopApp {
                     nsec_input: String::new(),
                     new_chat_input: String::new(),
                     message_input: String::new(),
+                    show_new_chat_form: false,
+                    selected_chat_id: None,
                 },
                 Task::none(),
             ),
@@ -81,6 +92,10 @@ impl DesktopApp {
                 if let Some(manager) = &self.manager {
                     let latest = manager.state();
                     if latest.rev != self.state.rev {
+                        // Sync selected_chat_id if core's current_chat changed
+                        if latest.current_chat.is_none() {
+                            self.selected_chat_id = None;
+                        }
                         self.state = latest;
                     }
                 }
@@ -100,8 +115,16 @@ impl DesktopApp {
                 if let Some(manager) = &self.manager {
                     manager.logout();
                 }
+                self.selected_chat_id = None;
+                self.show_new_chat_form = false;
             }
             Message::NewChatChanged(value) => self.new_chat_input = value,
+            Message::ToggleNewChatForm => {
+                self.show_new_chat_form = !self.show_new_chat_form;
+                if !self.show_new_chat_form {
+                    self.new_chat_input.clear();
+                }
+            }
             Message::StartChat => {
                 let peer_npub = self.new_chat_input.trim().to_string();
                 if peer_npub.is_empty() {
@@ -111,8 +134,10 @@ impl DesktopApp {
                     manager.dispatch(AppAction::CreateChat { peer_npub });
                 }
                 self.new_chat_input.clear();
+                self.show_new_chat_form = false;
             }
             Message::OpenChat(chat_id) => {
+                self.selected_chat_id = Some(chat_id.clone());
                 if let Some(manager) = &self.manager {
                     manager.dispatch(AppAction::OpenChat { chat_id });
                 }
@@ -144,172 +169,69 @@ impl DesktopApp {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        // ── Boot error ──────────────────────────────────────────────
         if let Some(error) = &self.boot_error {
-            return container(column![text("Pika Desktop (ICED)"), text(error)].spacing(12))
-                .center_x(Fill)
-                .center_y(Fill)
-                .into();
+            return container(
+                column![
+                    text("Pika Desktop")
+                        .size(24)
+                        .color(theme::TEXT_PRIMARY),
+                    text(error).color(theme::DANGER),
+                ]
+                .spacing(12),
+            )
+            .center_x(Fill)
+            .center_y(Fill)
+            .style(theme::surface_style)
+            .into();
         }
 
+        // ── Login screen ────────────────────────────────────────────
         if matches!(self.state.auth, AuthState::LoggedOut) {
-            let mut login_column = column![
-                text("Pika Desktop (ICED)").size(32),
-                text("Enter nsec to login"),
-                text_input("nsec1...", &self.nsec_input)
-                    .on_input(Message::NsecChanged)
-                    .on_submit(Message::Login),
-                row![
-                    button("Create Account").on_press(Message::CreateAccount),
-                    button("Login").on_press(Message::Login),
-                ]
-                .spacing(10)
-            ]
-            .spacing(12)
-            .max_width(520)
-            .align_x(Center);
+            let is_restoring = self
+                .manager
+                .as_ref()
+                .map_or(false, |m| m.is_restoring_session());
 
-            if let Some(manager) = &self.manager {
-                if manager.is_restoring_session() {
-                    login_column = login_column.push(text("Restoring previous session..."));
-                }
-            }
-
-            return container(login_column).center_x(Fill).center_y(Fill).into();
+            return views::login::login_view(
+                &self.nsec_input,
+                self.state.busy.creating_account,
+                is_restoring,
+            );
         }
 
-        let toast = if let Some(toast) = &self.state.toast {
-            row![
-                text(toast.clone()),
-                button("Dismiss").on_press(Message::ClearToast),
-            ]
-            .spacing(8)
-        } else {
-            row![].spacing(0)
-        };
+        // ── Main 3-pane layout ──────────────────────────────────────
 
-        let chat_list = self
-            .state
-            .chat_list
-            .iter()
-            .fold(column![], |column, chat: &ChatSummary| {
-                column.push(
-                    button(text(chat_title(chat)))
-                        .width(Fill)
-                        .on_press(Message::OpenChat(chat.chat_id.clone())),
-                )
-            })
-            .spacing(6);
+        // Toast bar (optional)
+        let mut main_column = column![];
+        if let Some(toast_msg) = &self.state.toast {
+            main_column = main_column.push(views::toast::toast_bar(toast_msg));
+        }
 
-        let left_rail = column![
-            text("Chats").size(24),
-            row![
-                button("Logout").on_press(Message::Logout),
-                button("Refresh").on_press(Message::Tick),
-            ]
-            .spacing(8),
-            text_input("peer npub...", &self.new_chat_input)
-                .on_input(Message::NewChatChanged)
-                .on_submit(Message::StartChat),
-            button("Start Chat").on_press(Message::StartChat),
-            scrollable(chat_list).height(Fill),
-        ]
-        .spacing(10)
-        .width(300)
-        .padding(12);
+        // Chat rail (left sidebar)
+        let rail = views::chat_rail::chat_rail_view(
+            &self.state.chat_list,
+            self.selected_chat_id.as_deref(),
+            self.show_new_chat_form,
+            &self.new_chat_input,
+        );
 
-        let chat_panel = if let Some(chat) = &self.state.current_chat {
-            let messages = chat
-                .messages
-                .iter()
-                .fold(column![], |column, msg: &ChatMessage| {
-                    column.push(text(format!(
-                        "{}: {}",
-                        sender_label(msg),
-                        msg.display_content
-                    )))
-                })
-                .spacing(6);
+        // Conversation or empty state (center)
+        let center_pane: Element<'_, Message> =
+            if let Some(chat) = &self.state.current_chat {
+                views::conversation::conversation_view(chat, &self.message_input)
+            } else {
+                views::empty_state::empty_state_view()
+            };
 
-            column![
-                text(chat_title_from_view(
-                    chat.group_name.as_deref(),
-                    &chat.members
-                ))
-                .size(24),
-                scrollable(messages).height(Fill),
-                row![
-                    text_input("Message...", &self.message_input)
-                        .on_input(Message::MessageChanged)
-                        .on_submit(Message::SendMessage),
-                    button("Send").on_press(Message::SendMessage),
-                ]
-                .spacing(8)
-            ]
-            .spacing(10)
-            .padding(12)
-            .width(Fill)
-        } else {
-            column![text("Select a chat").size(24)]
-                .padding(12)
-                .width(Fill)
-                .height(Fill)
-        };
+        let content = row![rail, vertical_rule(1), center_pane].height(Fill);
 
-        container(column![toast, row![left_rail, chat_panel].height(Fill)].spacing(8))
-            .padding(8)
+        main_column = main_column.push(content);
+
+        container(main_column)
             .width(Fill)
             .height(Fill)
+            .style(theme::surface_style)
             .into()
     }
-}
-
-fn chat_title(chat: &ChatSummary) -> String {
-    if chat.is_group {
-        if let Some(name) = &chat.group_name {
-            return name.clone();
-        }
-        return "Group".to_string();
-    }
-
-    if let Some(member) = chat.members.iter().find(|member| !member.npub.is_empty()) {
-        return member
-            .name
-            .clone()
-            .unwrap_or_else(|| short_npub(&member.npub));
-    }
-
-    "Direct chat".to_string()
-}
-
-fn chat_title_from_view(group_name: Option<&str>, members: &[pika_core::MemberInfo]) -> String {
-    if let Some(name) = group_name {
-        if !name.trim().is_empty() {
-            return name.to_string();
-        }
-    }
-    members
-        .first()
-        .and_then(|member| member.name.clone())
-        .unwrap_or_else(|| "Conversation".to_string())
-}
-
-fn sender_label(message: &ChatMessage) -> String {
-    if message.is_mine {
-        "Me".to_string()
-    } else if let Some(name) = &message.sender_name {
-        if !name.trim().is_empty() {
-            return name.clone();
-        }
-        "Peer".to_string()
-    } else {
-        "Peer".to_string()
-    }
-}
-
-fn short_npub(npub: &str) -> String {
-    const TAIL: usize = 8;
-    if npub.len() <= TAIL {
-        return npub.to_string();
-    }
-    format!("...{}", &npub[npub.len() - TAIL..])
 }

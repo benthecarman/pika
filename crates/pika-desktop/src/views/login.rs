@@ -1,0 +1,86 @@
+use iced::widget::{button, column, container, row, text, text_input, Space};
+use iced::{Center, Element, Fill, Length, Theme};
+
+use crate::theme;
+use crate::Message;
+
+/// Styled login screen with centered dark card.
+pub fn login_view<'a>(
+    nsec_input: &str,
+    busy: bool,
+    is_restoring: bool,
+) -> Element<'a, Message, Theme> {
+    let heading = text("Pika").size(36).color(theme::TEXT_PRIMARY).center();
+
+    let subtitle = text("Secure messaging over Nostr + MLS")
+        .size(14)
+        .color(theme::TEXT_SECONDARY)
+        .center();
+
+    let nsec_field = text_input("nsec1\u{2026}", nsec_input)
+        .on_input(Message::NsecChanged)
+        .on_submit(Message::Login)
+        .secure(true)
+        .padding(10)
+        .style(theme::dark_input_style);
+
+    let mut buttons = row![].spacing(10);
+
+    if busy {
+        buttons = buttons.push(
+            button(text("Creating\u{2026}").color(theme::TEXT_FADED).center())
+                .width(Length::Fill)
+                .padding([10, 20])
+                .style(theme::secondary_button_style),
+        );
+    } else {
+        buttons = buttons.push(
+            button(text("Create Account").center())
+                .on_press(Message::CreateAccount)
+                .width(Length::Fill)
+                .padding([10, 20])
+                .style(theme::secondary_button_style),
+        );
+        buttons = buttons.push(
+            button(text("Login").center())
+                .on_press(Message::Login)
+                .width(Length::Fill)
+                .padding([10, 20])
+                .style(theme::primary_button_style),
+        );
+    }
+
+    let mut card = column![
+        Space::with_height(8),
+        heading,
+        subtitle,
+        Space::with_height(8),
+        nsec_field,
+        buttons,
+    ]
+    .spacing(12)
+    .padding(32)
+    .max_width(420)
+    .align_x(Center);
+
+    if is_restoring {
+        card = card.push(
+            text("Restoring previous session\u{2026}")
+                .size(13)
+                .color(theme::TEXT_FADED)
+                .center(),
+        );
+    }
+
+    container(
+        container(card)
+            .style(theme::login_card_style)
+            .max_width(420),
+    )
+    .center_x(Fill)
+    .center_y(Fill)
+    .width(Fill)
+    .height(Fill)
+    .style(theme::surface_style)
+    .into()
+}
