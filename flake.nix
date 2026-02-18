@@ -1,5 +1,5 @@
 {
-  description = "Pika - Rust core + Android app dev environment";
+  description = "Pika - Rust core + iOS + Android app dev environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -119,6 +119,15 @@
           };
         };
 
+        # Xcode version pinned for the team. Install with: xcodes install 26.2
+        xcodeVersion = "26.2";
+        xcodeBaseDir = "/Applications/Xcode-${xcodeVersion}.0.app";
+
+        xcodeWrapper = pkgs.xcodeenv.composeXcodeWrapper {
+          versions = [ xcodeVersion ];
+          inherit xcodeBaseDir;
+        };
+
         zsp = pkgs.buildGoModule rec {
           pname = "zsp";
           version = "0.3.3";
@@ -177,6 +186,8 @@
             pkgs.pkg-config
           ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
             pkgs.xcodegen
+            pkgs.xcodes
+            xcodeWrapper
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             pkgs.xvfb-run
           ];
@@ -211,13 +222,6 @@
               fi
             fi
 
-            # iOS Simulator tooling ("xcrun simctl ...") only exists in a full Xcode install.
-            #
-            # In Nix shells on macOS it's common for the selected developer dir (via xcode-select)
-            # to point at Command Line Tools or a Nix Apple SDK path, which makes `xcrun simctl`
-            # fail with: "error: tool 'simctl' not found".
-            #
-            # Exporting DEVELOPER_DIR fixes this without requiring `sudo xcode-select -s ...`.
             if [ "$(uname -s)" = "Darwin" ]; then
               # Nix-provided Rust often links against a Nix Apple SDK that does not include
               # libiconv in its default search paths; many deps add `-liconv` explicitly.
@@ -227,9 +231,36 @@
                 export LIBRARY_PATH="${pkgs.libiconv}/lib"
               fi
 
-              DEV_DIR="$(ls -d /Applications/Xcode*.app/Contents/Developer 2>/dev/null | sort -V | tail -n 1 || true)"
-              if [ -n "$DEV_DIR" ]; then
-                export DEVELOPER_DIR="$DEV_DIR"
+              # Pin DEVELOPER_DIR to the team-standard Xcode managed by xcodeenv wrapper.
+              if [ -d "${xcodeBaseDir}/Contents/Developer" ]; then
+                export DEVELOPER_DIR="${xcodeBaseDir}/Contents/Developer"
+              else
+                echo ""
+                echo "┌─────────────────────────────────────────────────────────┐"
+                echo "│  Xcode ${xcodeVersion} not found at ${xcodeBaseDir}  │"
+                echo "│  iOS builds will not work without it.                   │"
+                echo "└─────────────────────────────────────────────────────────┘"
+                echo ""
+                if [ -t 0 ]; then
+                  printf "Install Xcode ${xcodeVersion} now? [y/N] "
+                  read -r answer
+                  if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+                    echo "Running: xcodes install ${xcodeVersion}"
+                    xcodes install ${xcodeVersion}
+                    if [ -d "${xcodeBaseDir}/Contents/Developer" ]; then
+                      export DEVELOPER_DIR="${xcodeBaseDir}/Contents/Developer"
+                      echo "Xcode ${xcodeVersion} installed successfully."
+                    else
+                      echo "WARNING: xcodes finished but Xcode not found at expected path."
+                      echo "  Check:  ls /Applications/Xcode*"
+                    fi
+                  else
+                    echo "Skipping. Run 'xcodes install ${xcodeVersion}' when ready."
+                  fi
+                else
+                  echo "  Install it with:  xcodes install ${xcodeVersion}"
+                fi
+                echo ""
               fi
             fi
 
@@ -265,6 +296,9 @@ PGEOF
             echo "  Android:      $ANDROID_HOME"
             echo "  NDK:          $ANDROID_NDK_HOME"
             echo "  DATABASE_URL: $DATABASE_URL"
+            if [ "$(uname -s)" = "Darwin" ]; then
+              echo "  Xcode:        ''${DEVELOPER_DIR:-not found}"
+            fi
             echo ""
           '';
         };
