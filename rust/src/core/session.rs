@@ -7,6 +7,9 @@ impl AppCore {
         // Tear down any existing session first.
         self.stop_session();
 
+        // Ensure profile pics directory exists (may have been cleared on logout).
+        profile_pics::ensure_dir(&self.data_dir);
+
         let pubkey = keys.public_key();
         let pubkey_hex = pubkey.to_hex();
         let npub = pubkey.to_bech32().unwrap_or(pubkey_hex.clone());
@@ -46,10 +49,11 @@ impl AppCore {
 
         self.state.auth = AuthState::LoggedIn {
             npub,
-            pubkey: pubkey_hex,
+            pubkey: pubkey_hex.clone(),
         };
-        self.my_metadata = None;
-        self.state.my_profile = crate::state::MyProfileState::empty();
+
+        // Build own profile from cached data (already loaded from DB in AppCore::new).
+        self.state.my_profile = self.my_profile_state();
         self.emit_auth();
         self.handle_auth_transition(true);
 
@@ -58,8 +62,11 @@ impl AppCore {
             self.start_notifications_loop();
         }
 
+        // Build the chat list. Profiles are already in memory, so names and
+        // cached picture URLs will be present from the first emission.
         self.load_archived_chats();
         self.refresh_all_from_storage();
+        self.cache_missing_profile_pics();
         self.refresh_my_profile(false);
         self.refresh_follow_list();
 
@@ -449,6 +456,16 @@ impl AppCore {
         let existing_profiles = self.profiles.clone();
 
         self.runtime.spawn(async move {
+            let empty = |tx: &flume::Sender<CoreMsg>| {
+                let _ = tx.send(CoreMsg::Internal(Box::new(
+                    InternalEvent::FollowListFetched {
+                        followed_pubkeys: vec![],
+                        fetched_profiles: vec![],
+                        checked_pubkeys: HashSet::new(),
+                    },
+                )));
+            };
+
             // 1) Fetch kind 3 (ContactList) for the user's own pubkey.
             let contact_filter = Filter::new()
                 .author(my_pubkey)
@@ -462,20 +479,14 @@ impl AppCore {
                 Ok(evs) => evs,
                 Err(e) => {
                     tracing::debug!(%e, "follow list fetch failed");
-                    let _ = tx.send(CoreMsg::Internal(Box::new(
-                        InternalEvent::FollowListFetched { entries: vec![] },
-                    )));
+                    empty(&tx);
                     return;
                 }
             };
 
-            // Pick the newest kind 3 event.
             let newest = contact_events.into_iter().max_by_key(|e| e.created_at);
             let Some(contact_event) = newest else {
-                // No contact list published yet.
-                let _ = tx.send(CoreMsg::Internal(Box::new(
-                    InternalEvent::FollowListFetched { entries: vec![] },
-                )));
+                empty(&tx);
                 return;
             };
 
@@ -494,9 +505,7 @@ impl AppCore {
                 .collect();
 
             if followed_pubkeys.is_empty() {
-                let _ = tx.send(CoreMsg::Internal(Box::new(
-                    InternalEvent::FollowListFetched { entries: vec![] },
-                )));
+                empty(&tx);
                 return;
             }
 
@@ -508,15 +517,14 @@ impl AppCore {
                     let hex = pk.to_hex();
                     match existing_profiles.get(&hex) {
                         None => true,
-                        Some(p) => (now - p.fetched_at) > 3600,
+                        Some(p) => (now - p.last_checked_at) > 3600,
                     }
                 })
                 .cloned()
                 .collect();
 
-            // 4) Batch-fetch kind 0 (Metadata) for missing profiles.
-            let mut fetched_profiles: HashMap<String, (Option<String>, Option<String>)> =
-                HashMap::new();
+            // 4) Batch-fetch kind 0 (Metadata) for stale profiles.
+            let mut fetched: Vec<(String, Option<String>, i64)> = Vec::new();
             if !needs_fetch.is_empty() {
                 let profile_filter = Filter::new()
                     .authors(needs_fetch.clone())
@@ -526,7 +534,6 @@ impl AppCore {
                     .fetch_events(profile_filter, Duration::from_secs(10))
                     .await
                 {
-                    // Keep only newest per author.
                     let mut best: HashMap<String, Event> = HashMap::new();
                     for ev in events.into_iter() {
                         let author_hex = ev.pubkey.to_hex();
@@ -539,50 +546,21 @@ impl AppCore {
                         }
                     }
                     for (hex_pk, ev) in best {
-                        let parsed: Option<(Option<String>, Option<String>)> =
-                            serde_json::from_str::<serde_json::Value>(&ev.content)
-                                .ok()
-                                .map(|v| {
-                                    let display_name = v
-                                        .get("display_name")
-                                        .and_then(|s| s.as_str())
-                                        .filter(|s| !s.is_empty())
-                                        .map(String::from);
-                                    let name = v
-                                        .get("name")
-                                        .and_then(|s| s.as_str())
-                                        .filter(|s| !s.is_empty())
-                                        .map(String::from);
-                                    let picture = v
-                                        .get("picture")
-                                        .and_then(|s| s.as_str())
-                                        .filter(|s| !s.is_empty())
-                                        .map(String::from);
-                                    (display_name.or(name), picture)
-                                });
-                        let (name, picture) = parsed.unwrap_or((None, None));
-                        fetched_profiles.insert(hex_pk, (name, picture));
+                        let event_created_at = ev.created_at.as_secs() as i64;
+                        fetched.push((hex_pk, Some(ev.content.clone()), event_created_at));
                     }
                 }
             }
 
-            // 5) Build result entries combining cached + freshly fetched profiles.
-            let entries: Vec<(String, Option<String>, Option<String>)> = followed_pubkeys
-                .iter()
-                .map(|pk| {
-                    let hex = pk.to_hex();
-                    if let Some((name, picture)) = fetched_profiles.get(&hex) {
-                        (hex, name.clone(), picture.clone())
-                    } else if let Some(cached) = existing_profiles.get(&hex) {
-                        (hex, cached.name.clone(), cached.picture_url.clone())
-                    } else {
-                        (hex, None, None)
-                    }
-                })
-                .collect();
-
+            let followed_hex: Vec<String> = followed_pubkeys.iter().map(|pk| pk.to_hex()).collect();
+            let checked_pubkeys: HashSet<String> =
+                needs_fetch.iter().map(|pk| pk.to_hex()).collect();
             let _ = tx.send(CoreMsg::Internal(Box::new(
-                InternalEvent::FollowListFetched { entries },
+                InternalEvent::FollowListFetched {
+                    followed_pubkeys: followed_hex,
+                    fetched_profiles: fetched,
+                    checked_pubkeys,
+                },
             )));
         });
     }
@@ -604,49 +582,23 @@ impl AppCore {
 
         self.runtime.spawn(async move {
             let filter = Filter::new().author(pk).kind(Kind::Metadata).limit(1);
-            let metadata = client
+            let best_event = client
                 .fetch_events(filter, Duration::from_secs(8))
                 .await
                 .ok()
-                .and_then(|evs| evs.into_iter().max_by_key(|e| e.created_at))
-                .and_then(|e| serde_json::from_str::<serde_json::Value>(&e.content).ok());
+                .and_then(|evs| evs.into_iter().max_by_key(|e| e.created_at));
 
-            let name = metadata
+            let event_created_at = best_event
                 .as_ref()
-                .and_then(|v| {
-                    v.get("display_name")
-                        .and_then(|s| s.as_str())
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| {
-                            v.get("name")
-                                .and_then(|s| s.as_str())
-                                .filter(|s| !s.is_empty())
-                        })
-                })
-                .map(String::from);
-            let about = metadata
-                .as_ref()
-                .and_then(|v| {
-                    v.get("about")
-                        .and_then(|s| s.as_str())
-                        .filter(|s| !s.is_empty())
-                })
-                .map(String::from);
-            let picture_url = metadata
-                .as_ref()
-                .and_then(|v| {
-                    v.get("picture")
-                        .and_then(|s| s.as_str())
-                        .filter(|s| !s.is_empty())
-                })
-                .map(String::from);
+                .map(|e| e.created_at.as_secs() as i64)
+                .unwrap_or(0);
+            let metadata_json = best_event.map(|e| e.content.clone());
 
             let _ = tx.send(CoreMsg::Internal(Box::new(
                 InternalEvent::PeerProfileFetched {
                     pubkey: pubkey_hex,
-                    name,
-                    about,
-                    picture_url,
+                    metadata_json,
+                    event_created_at,
                 },
             )));
         });

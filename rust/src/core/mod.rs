@@ -3,6 +3,8 @@ mod call_runtime;
 mod config;
 mod interop;
 mod profile;
+mod profile_db;
+mod profile_pics;
 mod push;
 mod session;
 mod storage;
@@ -57,12 +59,63 @@ struct GroupIndexEntry {
     admin_pubkeys: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ProfileCache {
+    // Full kind:0 event content JSON (preserved for forward compatibility).
+    metadata_json: Option<String>,
+    // Derived from metadata_json for fast access:
     name: Option<String>,
     about: Option<String>,
     picture_url: Option<String>,
-    fetched_at: i64,
+    event_created_at: i64,
+    // In-memory only (not persisted) — prevents re-fetching within a session.
+    // Starts at 0 on load from DB so profiles are always re-checked on app launch.
+    last_checked_at: i64,
+}
+
+impl ProfileCache {
+    fn from_metadata_json(
+        metadata_json: Option<String>,
+        event_created_at: i64,
+        last_checked_at: i64,
+    ) -> Self {
+        let parsed: Option<Metadata> = metadata_json
+            .as_ref()
+            .and_then(|json| serde_json::from_str(json).ok());
+        let name = parsed
+            .as_ref()
+            .and_then(|m| m.display_name.clone().or_else(|| m.name.clone()))
+            .filter(|s| !s.is_empty());
+        let about = parsed
+            .as_ref()
+            .and_then(|m| m.about.clone())
+            .filter(|s| !s.is_empty());
+        let picture_url = parsed
+            .as_ref()
+            .and_then(|m| m.picture.clone())
+            .filter(|s| !s.is_empty());
+
+        Self {
+            metadata_json,
+            name,
+            about,
+            picture_url,
+            event_created_at,
+            last_checked_at,
+        }
+    }
+
+    /// Returns a `file://` URL for the cached picture if the file exists on disk,
+    /// otherwise falls back to the remote `picture_url`.
+    fn display_picture_url(&self, data_dir: &str, pubkey_hex: &str) -> Option<String> {
+        if self.picture_url.is_some() {
+            let path = profile_pics::cached_path(data_dir, pubkey_hex);
+            if path.exists() {
+                return Some(profile_pics::path_to_file_url(&path));
+            }
+        }
+        self.picture_url.clone()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,13 +178,16 @@ pub struct AppCore {
 
     // Nostr kind:0 profile cache (survives across session refreshes).
     profiles: HashMap<String, ProfileCache>, // hex pubkey -> cached profile
-    my_metadata: Option<Metadata>,
+    profile_db: Option<rusqlite::Connection>,
+
+    // Shared HTTP client (profile pic downloads, push notifications).
+    http_client: reqwest::Client,
+    pfp_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
 
     // Archived chat IDs -- hidden from the chat list but data stays in MDK.
     archived_chats: HashSet<String>,
 
     // Push notification state.
-    http_client: reqwest::Client,
     push_device_id: String,
     push_apns_token: Option<String>,
     push_subscribed_chat_ids: HashSet<String>,
@@ -167,6 +223,20 @@ impl AppCore {
             .filter(|s| !s.is_empty())
             .map(ToString::to_string);
 
+        profile_pics::ensure_dir(&data_dir);
+
+        let profile_db = match profile_db::open_profile_db(&data_dir) {
+            Ok(conn) => Some(conn),
+            Err(e) => {
+                tracing::warn!(%e, "failed to open profile cache db");
+                None
+            }
+        };
+        let profiles = profile_db
+            .as_ref()
+            .map(profile_db::load_profiles)
+            .unwrap_or_default();
+
         let push_device_id = Self::load_or_create_push_device_id(&data_dir);
         let push_subscribed_chat_ids = Self::load_push_subscriptions(&data_dir);
 
@@ -191,10 +261,11 @@ impl AppCore {
             delivery_overrides: HashMap::new(),
             pending_sends: HashMap::new(),
             local_outbox: HashMap::new(),
-            profiles: HashMap::new(),
-            my_metadata: None,
-            archived_chats: HashSet::new(),
+            profiles,
+            profile_db,
             http_client: reqwest::Client::new(),
+            pfp_semaphore: profile_pics::new_download_semaphore(),
+            archived_chats: HashSet::new(),
             push_device_id,
             push_apns_token: None,
             push_subscribed_chat_ids,
@@ -411,6 +482,88 @@ impl AppCore {
         self.session.is_some()
     }
 
+    fn upsert_profile(&mut self, pubkey: String, new: ProfileCache) {
+        if let Some(existing) = self.profiles.get(&pubkey) {
+            if existing.event_created_at > new.event_created_at {
+                return; // existing is newer
+            }
+            // Picture URL changed → download new or remove stale cache.
+            if existing.picture_url != new.picture_url {
+                if let Some(ref url) = new.picture_url {
+                    self.spawn_pfp_download(pubkey.clone(), url.clone());
+                } else {
+                    let _ =
+                        std::fs::remove_file(profile_pics::cached_path(&self.data_dir, &pubkey));
+                }
+            }
+            if *existing == new {
+                return; // no change
+            }
+        } else {
+            // Brand new profile → spawn download if there's a picture URL.
+            if let Some(ref url) = new.picture_url {
+                self.spawn_pfp_download(pubkey.clone(), url.clone());
+            }
+        }
+        self.profiles.insert(pubkey.clone(), new);
+        if let Some(conn) = self.profile_db.as_ref() {
+            if let Some(cache) = self.profiles.get(&pubkey) {
+                profile_db::save_profile(conn, &pubkey, cache);
+            }
+        }
+    }
+
+    fn spawn_pfp_download(&self, pubkey: String, url: String) {
+        let client = self.http_client.clone();
+        let data_dir = self.data_dir.clone();
+        let semaphore = self.pfp_semaphore.clone();
+        let tx = self.core_sender.clone();
+        self.runtime.spawn(async move {
+            match profile_pics::download_image(&client, &data_dir, &pubkey, &url, &semaphore).await
+            {
+                Ok(_) => {
+                    let _ = tx.send(CoreMsg::Internal(Box::new(
+                        InternalEvent::ProfilePicCached { pubkey, url },
+                    )));
+                }
+                Err(e) => {
+                    tracing::debug!(%pubkey, %url, %e, "profile pic download failed");
+                }
+            }
+        });
+    }
+
+    fn cache_missing_profile_pics(&self) {
+        // Collect chat member pubkeys so we can prioritize them.
+        let mut chat_member_pubkeys: HashSet<String> = HashSet::new();
+        if let Some(sess) = self.session.as_ref() {
+            for entry in sess.groups.values() {
+                for (pk, _, _) in &entry.members {
+                    chat_member_pubkeys.insert(pk.to_hex());
+                }
+            }
+        }
+
+        // Download chat members first, then everyone else.
+        let mut deferred = Vec::new();
+        for (pubkey, cache) in &self.profiles {
+            let Some(ref url) = cache.picture_url else {
+                continue;
+            };
+            if profile_pics::cached_path(&self.data_dir, pubkey).exists() {
+                continue;
+            }
+            if chat_member_pubkeys.contains(pubkey) {
+                self.spawn_pfp_download(pubkey.clone(), url.clone());
+            } else {
+                deferred.push((pubkey.clone(), url.clone()));
+            }
+        }
+        for (pubkey, url) in deferred {
+            self.spawn_pfp_download(pubkey, url);
+        }
+    }
+
     fn push_screen(&mut self, screen: Screen) {
         self.state.router.screen_stack.push(screen);
     }
@@ -456,7 +609,10 @@ impl AppCore {
             self.pending_sends.clear();
             self.local_outbox.clear();
             self.profiles.clear();
-            self.my_metadata = None;
+            if let Some(conn) = self.profile_db.as_ref() {
+                profile_db::clear_all(conn);
+            }
+            profile_pics::clear_cache(&self.data_dir);
             self.state.my_profile = MyProfileState::empty();
             self.state.follow_list = vec![];
             self.state.peer_profile = None;
@@ -801,17 +957,13 @@ impl AppCore {
             }
             InternalEvent::ProfilesFetched { profiles } => {
                 let now = now_seconds();
-                for (hex_pubkey, name, picture_url) in profiles {
-                    self.profiles.insert(
+                for (hex_pubkey, metadata_json, event_created_at) in profiles {
+                    self.upsert_profile(
                         hex_pubkey,
-                        ProfileCache {
-                            name,
-                            about: None,
-                            picture_url,
-                            fetched_at: now,
-                        },
+                        ProfileCache::from_metadata_json(metadata_json, event_created_at, now),
                     );
                 }
+
                 self.refresh_chat_list_from_storage();
                 if let Some(chat) = self.state.current_chat.as_ref() {
                     let chat_id = chat.chat_id.clone();
@@ -1046,28 +1198,41 @@ impl AppCore {
 
                 self.refresh_all_from_storage();
             }
-            InternalEvent::FollowListFetched { entries } => {
+            InternalEvent::FollowListFetched {
+                followed_pubkeys,
+                fetched_profiles,
+                checked_pubkeys,
+            } => {
+                // Upsert freshly fetched profiles.
                 let now = now_seconds();
-                // Update profile cache with newly fetched data.
-                for (hex_pubkey, name, picture_url) in &entries {
-                    self.profiles.insert(
-                        hex_pubkey.clone(),
-                        ProfileCache {
-                            name: name.clone(),
-                            about: None,
-                            picture_url: picture_url.clone(),
-                            fetched_at: now,
-                        },
+                for (hex_pubkey, metadata_json, event_created_at) in fetched_profiles {
+                    self.upsert_profile(
+                        hex_pubkey,
+                        ProfileCache::from_metadata_json(metadata_json, event_created_at, now),
                     );
                 }
-                // Build follow list entries.
-                let mut follow_list: Vec<crate::state::FollowListEntry> = entries
+                // Mark checked-but-not-fetched pubkeys so we don't re-fetch them.
+                for pk in &checked_pubkeys {
+                    if !self.profiles.contains_key(pk) {
+                        self.upsert_profile(
+                            pk.clone(),
+                            ProfileCache::from_metadata_json(None, 0, now),
+                        );
+                    }
+                }
+
+                // Build follow list entries from the shared profile cache.
+                let mut follow_list: Vec<crate::state::FollowListEntry> = followed_pubkeys
                     .into_iter()
-                    .map(|(hex_pubkey, name, picture_url)| {
+                    .map(|hex_pubkey| {
                         let npub = PublicKey::from_hex(&hex_pubkey)
                             .ok()
                             .and_then(|pk| pk.to_bech32().ok())
                             .unwrap_or_else(|| hex_pubkey.clone());
+                        let cached = self.profiles.get(&hex_pubkey);
+                        let name = cached.and_then(|p| p.name.clone());
+                        let picture_url =
+                            cached.and_then(|p| p.display_picture_url(&self.data_dir, &hex_pubkey));
                         crate::state::FollowListEntry {
                             pubkey: hex_pubkey,
                             npub,
@@ -1098,29 +1263,97 @@ impl AppCore {
             }
             InternalEvent::PeerProfileFetched {
                 pubkey,
-                name,
-                about,
-                picture_url,
+                metadata_json,
+                event_created_at,
             } => {
-                // Update cache.
                 let now = now_seconds();
-                self.profiles.insert(
+                self.upsert_profile(
                     pubkey.clone(),
-                    ProfileCache {
-                        name: name.clone(),
-                        about: about.clone(),
-                        picture_url: picture_url.clone(),
-                        fetched_at: now,
-                    },
+                    ProfileCache::from_metadata_json(metadata_json, event_created_at, now),
                 );
+
                 // Update peer_profile if it's still showing this pubkey.
                 if let Some(ref mut pp) = self.state.peer_profile {
                     if pp.pubkey == pubkey {
-                        pp.name = name;
-                        pp.about = about;
-                        pp.picture_url = picture_url;
+                        let cached = self.profiles.get(&pubkey);
+                        pp.name = cached.and_then(|p| p.name.clone());
+                        pp.about = cached.and_then(|p| p.about.clone());
+                        pp.picture_url =
+                            cached.and_then(|p| p.display_picture_url(&self.data_dir, &pubkey));
                         self.emit_state();
                     }
+                }
+            }
+            InternalEvent::ProfilePicCached { pubkey, url } => {
+                // Only refresh if the profile still has the same picture_url
+                // (guards against mid-download URL changes).
+                let url_matches = self
+                    .profiles
+                    .get(&pubkey)
+                    .and_then(|c| c.picture_url.as_deref())
+                    == Some(&url);
+                if !url_matches {
+                    return;
+                }
+                let file_url = self
+                    .profiles
+                    .get(&pubkey)
+                    .and_then(|p| p.display_picture_url(&self.data_dir, &pubkey));
+                let mut changed = false;
+
+                // Update own profile.
+                let is_me = self
+                    .session
+                    .as_ref()
+                    .map(|s| s.keys.public_key().to_hex())
+                    .as_deref()
+                    == Some(&pubkey);
+                if is_me {
+                    let next = self.my_profile_state();
+                    if next != self.state.my_profile {
+                        self.state.my_profile = next;
+                        changed = true;
+                    }
+                }
+
+                // Patch picture URLs in chat list members.
+                for chat in &mut self.state.chat_list {
+                    for member in &mut chat.members {
+                        if member.pubkey == pubkey {
+                            member.picture_url = file_url.clone();
+                            changed = true;
+                        }
+                    }
+                }
+
+                // Patch picture URLs in current chat members.
+                if let Some(ref mut chat) = self.state.current_chat {
+                    for member in &mut chat.members {
+                        if member.pubkey == pubkey {
+                            member.picture_url = file_url.clone();
+                            changed = true;
+                        }
+                    }
+                }
+
+                // Patch peer profile if open.
+                if let Some(ref mut pp) = self.state.peer_profile {
+                    if pp.pubkey == pubkey {
+                        pp.picture_url = file_url.clone();
+                        changed = true;
+                    }
+                }
+
+                // Patch follow list.
+                for entry in &mut self.state.follow_list {
+                    if entry.pubkey == pubkey {
+                        entry.picture_url = file_url.clone();
+                        changed = true;
+                    }
+                }
+
+                if changed {
+                    self.emit_state();
                 }
             }
             InternalEvent::ContactListModifyFailed { pubkey, revert_to } => {
@@ -1379,7 +1612,8 @@ impl AppCore {
                     npub,
                     name: cached.and_then(|p| p.name.clone()),
                     about: cached.and_then(|p| p.about.clone()),
-                    picture_url: cached.and_then(|p| p.picture_url.clone()),
+                    picture_url: cached
+                        .and_then(|p| p.display_picture_url(&self.data_dir, &pubkey)),
                     is_followed,
                 });
                 self.emit_state();

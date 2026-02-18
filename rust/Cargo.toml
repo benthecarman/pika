@@ -12,6 +12,7 @@ anyhow = "1"
 base64 = "0.22"
 flume = "0.11"
 hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # NOTE: CI-compatible dependency pinning. Do not use local path deps here.
 # If you need to develop against a local MDK checkout, use a gitignored
 # `.cargo/config.toml` with a `[patch."https://github.com/marmot-protocol/mdk"]`
@@ -26,7 +27,8 @@ nostr-blossom = "0.44.0"
 pika-media = { path = "../crates/pika-media", features = ["network"] }
 pika-tls = { path = "../crates/pika-tls" }
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+rusqlite = "0.32"
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

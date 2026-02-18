@@ -72,6 +72,16 @@ private final class ImageLoader: ObservableObject {
             return
         }
 
+        // Local files: read synchronously (tiny resized JPEGs, ~40KB).
+        if url.isFileURL {
+            if let data = try? Data(contentsOf: url),
+               let uiImage = UIImage(data: data) {
+                ImageCache.shared.setImage(uiImage, for: url)
+                self.image = uiImage
+            }
+            return
+        }
+
         task = Task {
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)

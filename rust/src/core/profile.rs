@@ -218,8 +218,21 @@ impl AppCore {
     }
 
     pub(super) fn apply_my_profile_metadata(&mut self, metadata: Option<Metadata>) {
-        self.my_metadata = metadata.clone();
-        let next = Self::profile_state_from_metadata(metadata.as_ref());
+        // Serialize to JSON and upsert into the shared profile cache —
+        // same storage and picture-caching path as every other profile.
+        if let Some(pk) = self.session.as_ref().map(|s| s.keys.public_key().to_hex()) {
+            let metadata_json = metadata.and_then(|m| serde_json::to_string(&m).ok());
+            self.upsert_profile(
+                pk,
+                ProfileCache::from_metadata_json(
+                    metadata_json,
+                    crate::state::now_seconds(),
+                    crate::state::now_seconds(),
+                ),
+            );
+        }
+
+        let next = self.my_profile_state();
         if next != self.state.my_profile {
             self.state.my_profile = next;
             self.emit_state();
@@ -227,7 +240,20 @@ impl AppCore {
     }
 
     fn metadata_for_profile_edit(&self, name: String, about: String) -> Metadata {
-        let mut metadata = self.my_metadata.clone().unwrap_or_default();
+        // Reconstruct Metadata from the stored JSON, preserving fields we don't edit.
+        let pk = self.session.as_ref().map(|s| s.keys.public_key().to_hex());
+        let mut metadata: Metadata = pk
+            .and_then(|pk| {
+                // Try in-memory first (set by apply_my_profile_metadata), then fall back to DB.
+                let in_mem = self.profiles.get(&pk).and_then(|p| p.metadata_json.clone());
+                in_mem.or_else(|| {
+                    self.profile_db
+                        .as_ref()
+                        .and_then(|conn| super::profile_db::load_metadata_json(conn, &pk))
+                })
+            })
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
         let name = Self::normalized_profile_field(name);
         metadata.name = name.clone();
         metadata.display_name = name;
@@ -235,23 +261,18 @@ impl AppCore {
         metadata
     }
 
-    fn profile_state_from_metadata(metadata: Option<&Metadata>) -> MyProfileState {
-        let name = metadata
-            .and_then(|m| m.display_name.clone().or_else(|| m.name.clone()))
-            .and_then(Self::normalized_profile_field)
-            .unwrap_or_default();
-        let about = metadata
-            .and_then(|m| m.about.clone())
-            .and_then(Self::normalized_profile_field)
-            .unwrap_or_default();
-        let picture_url = metadata
-            .and_then(|m| m.picture.clone())
-            .and_then(Self::normalized_profile_field);
+    /// Build current MyProfileState from the shared profile cache.
+    pub(super) fn my_profile_state(&self) -> MyProfileState {
+        let pk = self.session.as_ref().map(|s| s.keys.public_key().to_hex());
+        let cached = pk.as_ref().and_then(|pk| self.profiles.get(pk));
 
         MyProfileState {
-            name,
-            about,
-            picture_url,
+            name: cached.and_then(|p| p.name.clone()).unwrap_or_default(),
+            about: cached.and_then(|p| p.about.clone()).unwrap_or_default(),
+            picture_url: match (cached, pk.as_ref()) {
+                (Some(p), Some(pk)) => p.display_picture_url(&self.data_dir, pk),
+                _ => None,
+            },
         }
     }
 

@@ -67,12 +67,12 @@ impl AppCore {
                 let hex = pk.to_hex();
                 let cached = self.profiles.get(&hex);
                 let name = cached.and_then(|p| p.name.clone());
-                let picture_url = cached.and_then(|p| p.picture_url.clone());
+                let picture_url = cached.and_then(|p| p.display_picture_url(&self.data_dir, &hex));
                 member_infos.push((*pk, name, picture_url));
 
                 let needs_fetch = match cached {
                     None => true,
-                    Some(p) => (now - p.fetched_at) > 3600,
+                    Some(p) => (now - p.last_checked_at) > 3600,
                 };
                 if needs_fetch && !missing_profile_pubkeys.iter().any(|p| p == pk) {
                     missing_profile_pubkeys.push(*pk);
@@ -169,7 +169,6 @@ impl AppCore {
         self.state.chat_list = list;
         self.emit_chat_list();
         self.sync_push_subscriptions();
-        self.write_profiles_cache();
 
         // Fetch missing profiles asynchronously.
         if !missing_profile_pubkeys.is_empty() && self.network_enabled() {
@@ -203,34 +202,10 @@ impl AppCore {
                         }
                     }
 
-                    let mut results: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+                    let mut results: Vec<(String, Option<String>, i64)> = Vec::new();
                     for (hex_pk, ev) in best {
-                        // Parse kind:0 content as JSON.
-                        let parsed: Option<(Option<String>, Option<String>)> =
-                            serde_json::from_str::<serde_json::Value>(&ev.content)
-                                .ok()
-                                .map(|v| {
-                                    let display_name = v
-                                        .get("display_name")
-                                        .and_then(|s| s.as_str())
-                                        .filter(|s| !s.is_empty())
-                                        .map(String::from);
-                                    let name = v
-                                        .get("name")
-                                        .and_then(|s| s.as_str())
-                                        .filter(|s| !s.is_empty())
-                                        .map(String::from);
-                                    let picture = v
-                                        .get("picture")
-                                        .and_then(|s| s.as_str())
-                                        .filter(|s| !s.is_empty())
-                                        .map(String::from);
-                                    // Priority: display_name > name > None
-                                    let best_name = display_name.or(name);
-                                    (best_name, picture)
-                                });
-                        let (name, picture) = parsed.unwrap_or((None, None));
-                        results.push((hex_pk, name, picture));
+                        let event_created_at = ev.created_at.as_secs() as i64;
+                        results.push((hex_pk, Some(ev.content.clone()), event_created_at));
                     }
 
                     // Also record "no profile" for pubkeys with no kind:0 event, so we
@@ -238,7 +213,7 @@ impl AppCore {
                     for pk in &pubkeys {
                         let hex = pk.to_hex();
                         if !results.iter().any(|(h, _, _)| h == &hex) {
-                            results.push((hex, None, None));
+                            results.push((hex, None, 0));
                         }
                     }
 

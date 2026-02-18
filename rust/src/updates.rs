@@ -78,9 +78,6 @@ pub enum InternalEvent {
     },
 
     // Result of publishing a group evolution event (add/remove/leave/rename commit).
-    // Fires asynchronously after relay confirmation. The handler merges the pending
-    // commit and sends welcomes — the UI busy state is already cleared by the caller
-    // of publish_evolution_event(), so this runs entirely in the background.
     GroupEvolutionPublished {
         chat_id: String,
         mls_group_id: mdk_core::prelude::GroupId,
@@ -99,7 +96,7 @@ pub enum InternalEvent {
 
     // Nostr kind:0 profile metadata fetched for peers.
     ProfilesFetched {
-        profiles: Vec<(String, Option<String>, Option<String>)>, // (hex_pubkey, name, picture_url)
+        profiles: Vec<(String, Option<String>, i64)>, // (hex_pubkey, metadata_json, event_created_at)
     },
 
     // Nostr kind:0 profile metadata for the logged-in user.
@@ -116,15 +113,22 @@ pub enum InternalEvent {
 
     // Follow list (NIP-02 kind 3)
     FollowListFetched {
-        entries: Vec<(String, Option<String>, Option<String>)>, // (hex_pubkey, name, picture_url)
+        followed_pubkeys: Vec<String>,
+        fetched_profiles: Vec<(String, Option<String>, i64)>, // (hex_pubkey, metadata_json, event_created_at)
+        checked_pubkeys: std::collections::HashSet<String>,
+    },
+
+    // Profile picture downloaded and cached to disk.
+    ProfilePicCached {
+        pubkey: String,
+        url: String,
     },
 
     // Peer profile fetch result
     PeerProfileFetched {
         pubkey: String,
-        name: Option<String>,
-        about: Option<String>,
-        picture_url: Option<String>,
+        metadata_json: Option<String>,
+        event_created_at: i64,
     },
 
     // Contact list modification result

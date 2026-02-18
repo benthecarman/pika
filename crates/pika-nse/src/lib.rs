@@ -93,30 +93,50 @@ pub fn decrypt_push_notification(
     })
 }
 
-/// Look up display name and picture URL from the profiles cache on disk.
+/// Look up display name and picture URL from the SQLite profile cache.
 fn resolve_sender_profile(data_dir: &str, pubkey_hex: &str) -> (String, Option<String>) {
-    let path = std::path::Path::new(data_dir).join("profiles_cache.json");
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        if let Ok(map) =
-            serde_json::from_str::<std::collections::HashMap<String, ProfileCacheEntry>>(&data)
-        {
-            if let Some(entry) = map.get(pubkey_hex) {
-                let name = entry
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("{}...", &pubkey_hex[..8]));
-                return (name, entry.picture.clone());
-            }
-        }
-    }
-    // Truncated hex fallback.
-    (format!("{}...", &pubkey_hex[..8]), None)
-}
+    let fallback = (format!("{}...", &pubkey_hex[..8]), None);
 
-#[derive(serde::Deserialize)]
-struct ProfileCacheEntry {
-    name: Option<String>,
-    picture: Option<String>,
+    let db_path = std::path::Path::new(data_dir).join("profiles.sqlite3");
+    let conn = match rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(c) => c,
+        Err(_) => return fallback,
+    };
+
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT metadata->>'display_name', metadata->>'name', metadata->>'picture'
+             FROM profiles WHERE pubkey = ?1",
+            [pubkey_hex],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .ok();
+
+    let Some((display_name, name_field, picture)) = row else {
+        return fallback;
+    };
+
+    let name = display_name
+        .filter(|s| !s.is_empty())
+        .or(name_field.filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| format!("{}...", &pubkey_hex[..8]));
+
+    let picture_url = picture.filter(|s| !s.is_empty()).map(|url| {
+        // Prefer locally cached profile picture if available.
+        let cached = std::path::Path::new(data_dir)
+            .join("profile_pics")
+            .join(pubkey_hex);
+        if cached.exists() {
+            format!("file://{}", cached.display())
+        } else {
+            url
+        }
+    });
+
+    (name, picture_url)
 }
 
 /// Minimal check for call signal payloads without pulling in heavy call_control deps.
