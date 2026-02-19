@@ -91,6 +91,15 @@ enum InCmd {
         call_id: String,
         tts_text: String,
     },
+    SendAudioFile {
+        #[serde(default)]
+        request_id: Option<String>,
+        call_id: String,
+        audio_path: String,
+        sample_rate: u32,
+        #[serde(default = "default_channels")]
+        channels: u16,
+    },
     Shutdown {
         #[serde(default)]
         request_id: Option<String>,
@@ -164,6 +173,10 @@ enum OutMsg {
     },
 }
 
+fn default_channels() -> u16 {
+    1
+}
+
 fn default_reject_reason() -> String {
     "declined".to_string()
 }
@@ -218,7 +231,15 @@ struct CallMediaCryptoContext {
 
 #[derive(Debug)]
 enum CallWorkerEvent {
-    TranscriptFinal { call_id: String, text: String },
+    TranscriptFinal {
+        call_id: String,
+        text: String,
+    },
+    AudioPublished {
+        call_id: String,
+        request_id: Option<String>,
+        result: anyhow::Result<VoicePublishStats>,
+    },
 }
 
 #[derive(Debug)]
@@ -998,21 +1019,13 @@ fn publish_pcm_audio_response_with_relay(
     })
 }
 
-fn publish_tts_audio_response_with_transport(
+fn publish_pcm_audio_response_with_transport(
     session: &CallSessionParams,
     transport: CallMediaTransport,
     media_crypto: &CallMediaCryptoContext,
     start_seq: u64,
-    tts_text: &str,
+    tts_pcm: crate::call_tts::TtsPcm,
 ) -> anyhow::Result<VoicePublishStats> {
-    // synthesize_tts_pcm uses reqwest::blocking::Client which panics if created
-    // inside a tokio runtime. Run it on a dedicated thread.
-    let text = tts_text.to_string();
-    let tts_pcm = std::thread::spawn(move || synthesize_tts_pcm(&text))
-        .join()
-        .map_err(|_| anyhow!("tts synthesis thread panicked"))?
-        .context("synthesize call tts")?;
-
     let Some(track) = call_audio_track_spec(session) else {
         return Err(anyhow!("call session missing opus audio track"));
     };
@@ -1032,14 +1045,13 @@ fn publish_tts_audio_response_with_transport(
         track_name: track.name.clone(),
     };
     tracing::info!(
-        "[tts] publish init (transport) broadcast_base={} local_label={} peer_label={} publish_path={} track={} start_seq={} text_len={}",
+        "[tts] publish init (transport) broadcast_base={} local_label={} peer_label={} publish_path={} track={} start_seq={}",
         session.broadcast_base,
         media_crypto.local_participant_label,
         media_crypto.peer_participant_label,
         publish_track.broadcast_path,
         publish_track.track_name,
         start_seq,
-        tts_text.len()
     );
 
     let mono_pcm = downmix_to_mono(&tts_pcm.pcm_i16, tts_pcm.channels);
@@ -1088,12 +1100,53 @@ fn publish_tts_audio_response_with_transport(
             .context("publish tts frame")?;
         seq = seq.saturating_add(1);
         frames = frames.saturating_add(1);
+        // Pace frame delivery at ~real-time so the receiver doesn't get a
+        // burst of frames it can't buffer properly.
+        std::thread::sleep(Duration::from_millis(track.frame_ms as u64));
     }
 
     Ok(VoicePublishStats {
         next_seq: seq,
         frames_published: frames,
     })
+}
+
+fn publish_tts_audio_response_with_transport(
+    session: &CallSessionParams,
+    transport: CallMediaTransport,
+    media_crypto: &CallMediaCryptoContext,
+    start_seq: u64,
+    tts_text: &str,
+) -> anyhow::Result<VoicePublishStats> {
+    // synthesize_tts_pcm uses reqwest::blocking::Client which panics if created
+    // inside a tokio runtime. Run it on a dedicated thread.
+    let text = tts_text.to_string();
+    let tts_pcm = std::thread::spawn(move || synthesize_tts_pcm(&text))
+        .join()
+        .map_err(|_| anyhow!("tts synthesis thread panicked"))?
+        .context("synthesize call tts")?;
+    publish_pcm_audio_response_with_transport(session, transport, media_crypto, start_seq, tts_pcm)
+}
+
+fn publish_pcm_audio_response(
+    session: &CallSessionParams,
+    media_crypto: &CallMediaCryptoContext,
+    start_seq: u64,
+    tts_pcm: crate::call_tts::TtsPcm,
+) -> anyhow::Result<VoicePublishStats> {
+    if is_real_moq_url(&session.moq_url) {
+        let transport = CallMediaTransport::for_session(session)?;
+        publish_pcm_audio_response_with_transport(
+            session,
+            transport,
+            media_crypto,
+            start_seq,
+            tts_pcm,
+        )
+    } else {
+        let relay = shared_call_relay(session);
+        publish_pcm_audio_response_with_relay(session, relay, media_crypto, start_seq, tts_pcm)
+    }
 }
 
 fn publish_tts_audio_response(
@@ -2369,6 +2422,79 @@ pub async fn daemon_main(
                             }
                         }
                     }
+                    InCmd::SendAudioFile {
+                        request_id,
+                        call_id,
+                        audio_path,
+                        sample_rate,
+                        channels,
+                    } => {
+                        let Some(current) = active_call.as_mut() else {
+                            let _ = out_tx.send(out_error(request_id, "not_found", "active call not found"));
+                            continue;
+                        };
+                        if current.call_id != call_id {
+                            let _ = out_tx.send(out_error(request_id, "not_found", "active call id mismatch"));
+                            continue;
+                        }
+                        tracing::info!(
+                            "[marmotd] send_audio_file start call_id={} path={} sample_rate={} channels={}",
+                            call_id, audio_path, sample_rate, channels
+                        );
+                        let raw_bytes = match std::fs::read(&audio_path) {
+                            Ok(b) => b,
+                            Err(err) => {
+                                let _ = out_tx.send(out_error(
+                                    request_id,
+                                    "io_error",
+                                    format!("failed to read audio file {audio_path}: {err}"),
+                                ));
+                                continue;
+                            }
+                        };
+                        let pcm_i16: Vec<i16> = raw_bytes
+                            .chunks_exact(2)
+                            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                            .collect();
+                        let tts_pcm = crate::call_tts::TtsPcm {
+                            sample_rate_hz: sample_rate,
+                            channels,
+                            pcm_i16,
+                        };
+                        // Reserve the sequence range upfront so the main loop
+                        // can continue processing commands while audio publishes.
+                        let session = current.session.clone();
+                        let media_crypto = current.media_crypto.clone();
+                        let start_seq = current.next_voice_seq;
+                        // Estimate frames so we can reserve the seq range.
+                        let track_sample_rate = call_audio_track_spec(&current.session)
+                            .map(|t| t.sample_rate)
+                            .unwrap_or(48_000);
+                        let track_frame_ms = call_audio_track_spec(&current.session)
+                            .map(|t| t.frame_ms)
+                            .unwrap_or(20);
+                        let resampled_len = ((tts_pcm.pcm_i16.len() as u64)
+                            .saturating_mul(track_sample_rate as u64)
+                            / (tts_pcm.sample_rate_hz as u64).max(1)) as usize;
+                        let frame_samples = ((track_sample_rate as usize) * (track_frame_ms as usize) / 1000).max(1);
+                        let estimated_frames = resampled_len.div_ceil(frame_samples);
+                        current.next_voice_seq = start_seq.saturating_add(estimated_frames as u64);
+
+                        let evt_tx = call_evt_tx.clone();
+                        std::thread::spawn(move || {
+                            let result = publish_pcm_audio_response(
+                                &session,
+                                &media_crypto,
+                                start_seq,
+                                tts_pcm,
+                            );
+                            let _ = evt_tx.send(CallWorkerEvent::AudioPublished {
+                                call_id,
+                                request_id,
+                                result,
+                            });
+                        });
+                    }
                     InCmd::Shutdown { request_id } => {
                         out_tx.send(out_ok(request_id, None)).ok();
                         shutdown = true;
@@ -2399,44 +2525,114 @@ pub async fn daemon_main(
                             call_id: call_id.clone(),
                             text: text.clone(),
                         });
-                        if let Err(err) = publish_group_message(
-                            &client,
-                            &relay_urls,
-                            &mdk,
-                            &keys,
-                            &nostr_group_id,
-                            text.clone(),
-                            "call_transcript_final",
-                        )
-                        .await
-                        {
-                            warn!(
-                                "[marmotd] call transcript publish failed call_id={} group={} err={err:#}",
-                                call_id, nostr_group_id
-                            );
-                        }
 
-                        // Publish TTS audio response.
-                        match publish_tts_audio_response(
-                            &session,
-                            &media_crypto,
-                            start_seq,
-                            &text,
-                        ) {
+                        // When a controller (e.g. OpenClaw JS plugin) is connected via
+                        // stdin/stdout JSON-RPC, it owns the reply pipeline: it dispatches
+                        // the transcript to an LLM, runs TTS, and sends audio back via
+                        // SendAudioWav.  The daemon should NOT also publish a group text
+                        // message (which echoes the caller's speech as a chat bubble) or
+                        // run its own TTS (which would double-speak).
+                        //
+                        // The built-in TTS + group-message path is only useful for
+                        // standalone marmotd without a controller.  Detect the controller
+                        // by checking whether stdin is a pipe (i.e. spawned by a parent
+                        // process) vs a terminal.
+                        let has_controller = !atty::is(atty::Stream::Stdin);
+
+                        if !has_controller {
+                            if let Err(err) = publish_group_message(
+                                &client,
+                                &relay_urls,
+                                &mdk,
+                                &keys,
+                                &nostr_group_id,
+                                text.clone(),
+                                "call_transcript_final",
+                            )
+                            .await
+                            {
+                                warn!(
+                                    "[marmotd] call transcript publish failed call_id={} group={} err={err:#}",
+                                    call_id, nostr_group_id
+                                );
+                            }
+
+                            // Publish TTS audio response (standalone mode only).
+                            match publish_tts_audio_response(
+                                &session,
+                                &media_crypto,
+                                start_seq,
+                                &text,
+                            ) {
+                                Ok(stats) => {
+                                    if let Some(call) = active_call.as_mut().filter(|c| c.call_id == call_id) {
+                                        call.next_voice_seq = stats.next_seq;
+                                    }
+                                    tracing::info!(
+                                        "[marmotd] tts response published call_id={} frames={}",
+                                        call_id, stats.frames_published
+                                    );
+                                }
+                                Err(err) => {
+                                    warn!(
+                                        "[marmotd] tts response failed call_id={} err={err:#}",
+                                        call_id
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    CallWorkerEvent::AudioPublished { call_id, request_id, result } => {
+                        match result {
                             Ok(stats) => {
+                                // Update next_voice_seq to the actual value (may differ
+                                // slightly from the estimate used when spawning).
                                 if let Some(call) = active_call.as_mut().filter(|c| c.call_id == call_id) {
                                     call.next_voice_seq = stats.next_seq;
                                 }
                                 tracing::info!(
-                                    "[marmotd] tts response published call_id={} frames={}",
-                                    call_id, stats.frames_published
+                                    "[marmotd] send_audio_file ok call_id={} frames={} next_seq={}",
+                                    call_id, stats.frames_published, stats.next_seq
                                 );
+                                let (publish_path, subscribe_path, track_name) = active_call
+                                    .as_ref()
+                                    .filter(|c| c.call_id == call_id)
+                                    .map(|c| {
+                                        let pp = broadcast_path(
+                                            &c.session.broadcast_base,
+                                            &c.media_crypto.local_participant_label,
+                                        ).ok();
+                                        let sp = broadcast_path(
+                                            &c.session.broadcast_base,
+                                            &c.media_crypto.peer_participant_label,
+                                        ).ok();
+                                        let tn = call_audio_track_spec(&c.session)
+                                            .map(|t| t.name.clone())
+                                            .unwrap_or_default();
+                                        (pp, sp, tn)
+                                    })
+                                    .unwrap_or((None, None, String::new()));
+                                let _ = out_tx.send(out_ok(
+                                    request_id,
+                                    Some(json!({
+                                        "call_id": call_id,
+                                        "frames_published": stats.frames_published,
+                                        "publish_path": publish_path,
+                                        "subscribe_path": subscribe_path,
+                                        "track": track_name,
+                                    })),
+                                ));
                             }
                             Err(err) => {
                                 warn!(
-                                    "[marmotd] tts response failed call_id={} err={err:#}",
+                                    "[marmotd] send_audio_file failed call_id={} err={err:#}",
                                     call_id
                                 );
+                                let _ = out_tx.send(out_error(
+                                    request_id,
+                                    "runtime_error",
+                                    format!("audio file publish failed: {err:#}"),
+                                ));
                             }
                         }
                     }
