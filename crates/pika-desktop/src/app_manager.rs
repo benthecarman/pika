@@ -230,7 +230,7 @@ impl FileNsecStore {
     }
 }
 
-fn resolve_data_dir() -> std::io::Result<PathBuf> {
+pub(crate) fn resolve_data_dir() -> std::io::Result<PathBuf> {
     let dir = if let Some(raw) = std::env::var_os("PIKA_DESKTOP_DATA_DIR") {
         PathBuf::from(raw)
     } else if let Some(home) = std::env::var_os("HOME") {

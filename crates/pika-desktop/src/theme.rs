@@ -262,6 +262,20 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+pub fn truncated_npub(npub: &str) -> String {
+    if npub.len() <= 20 {
+        return npub.to_string();
+    }
+    format!("{}\u{2026}{}", &npub[..12], &npub[npub.len() - 4..])
+}
+
+pub fn truncated_npub_long(npub: &str) -> String {
+    if npub.len() <= 30 {
+        return npub.to_string();
+    }
+    format!("{}\u{2026}{}", &npub[..16], &npub[npub.len() - 8..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,6 +288,27 @@ mod tests {
     #[test]
     fn truncate_long_adds_ellipsis() {
         assert_eq!(truncate("hello world", 6), "hello\u{2026}");
+    }
+
+    #[test]
+    fn truncated_npub_short_unchanged() {
+        assert_eq!(truncated_npub("npub1abcd"), "npub1abcd");
+    }
+
+    #[test]
+    fn truncated_npub_long_is_compact() {
+        assert_eq!(
+            truncated_npub("npub1abcdefghijklmnopqrstu"),
+            "npub1abcdefg\u{2026}rstu"
+        );
+    }
+
+    #[test]
+    fn truncated_npub_long_variant_is_compact() {
+        assert_eq!(
+            truncated_npub_long("npub1abcdefghijklmnopqrstuvwxyz123456"),
+            "npub1abcdefghijk\u{2026}yz123456"
+        );
     }
 
     #[test]

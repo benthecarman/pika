@@ -91,66 +91,28 @@ pub enum Message {
 
 impl DesktopApp {
     fn new() -> (Self, Task<Message>) {
-        let data_dir = Self::data_dir();
+        let data_dir = app_manager::resolve_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".pika-desktop"))
+            .to_string_lossy()
+            .to_string();
         let cached_profiles = pika_core::load_cached_profiles(&data_dir);
 
-        match AppManager::new() {
+        let (manager, boot_error, state) = match AppManager::new() {
             Ok(manager) => {
                 let state = manager.state();
-                (
-                    Self {
-                        manager: Some(manager),
-                        boot_error: None,
-                        state,
-                        avatar_cache: std::cell::RefCell::new(views::avatar::AvatarCache::new()),
-                        cached_profiles,
-                        nsec_input: String::new(),
-                        new_chat_input: String::new(),
-                        new_chat_search: String::new(),
-                        filtered_follows: Vec::new(),
-                        message_input: String::new(),
-                        show_new_chat_form: false,
-                        selected_chat_id: None,
-                        show_new_group_form: false,
-                        group_name_input: String::new(),
-                        selected_group_members: Vec::new(),
-                        show_my_profile: false,
-                        profile_name_draft: String::new(),
-                        profile_about_draft: String::new(),
-                        show_group_info: false,
-                        group_info_name_draft: String::new(),
-                        group_info_npub_input: String::new(),
-                    },
-                    Task::none(),
-                )
+                (Some(manager), None, state)
             }
             Err(error) => (
-                Self {
-                    manager: None,
-                    boot_error: Some(format!("failed to start desktop manager: {error}")),
-                    state: AppState::empty(),
-                    avatar_cache: std::cell::RefCell::new(views::avatar::AvatarCache::new()),
-                    cached_profiles,
-                    nsec_input: String::new(),
-                    new_chat_input: String::new(),
-                    new_chat_search: String::new(),
-                    filtered_follows: Vec::new(),
-                    message_input: String::new(),
-                    show_new_chat_form: false,
-                    selected_chat_id: None,
-                    show_new_group_form: false,
-                    group_name_input: String::new(),
-                    selected_group_members: Vec::new(),
-                    show_my_profile: false,
-                    profile_name_draft: String::new(),
-                    profile_about_draft: String::new(),
-                    show_group_info: false,
-                    group_info_name_draft: String::new(),
-                    group_info_npub_input: String::new(),
-                },
-                Task::none(),
+                None,
+                Some(format!("failed to start desktop manager: {error}")),
+                AppState::empty(),
             ),
-        }
+        };
+
+        (
+            Self::from_boot_state(cached_profiles, manager, boot_error, state),
+            Task::none(),
+        )
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -567,17 +529,35 @@ impl DesktopApp {
             .into()
     }
 
-    fn data_dir() -> String {
-        if let Some(raw) = std::env::var_os("PIKA_DESKTOP_DATA_DIR") {
-            return raw.to_string_lossy().to_string();
+    fn from_boot_state(
+        cached_profiles: Vec<pika_core::FollowListEntry>,
+        manager: Option<AppManager>,
+        boot_error: Option<String>,
+        state: AppState,
+    ) -> Self {
+        Self {
+            manager,
+            boot_error,
+            state,
+            avatar_cache: std::cell::RefCell::new(views::avatar::AvatarCache::new()),
+            cached_profiles,
+            nsec_input: String::new(),
+            new_chat_input: String::new(),
+            new_chat_search: String::new(),
+            filtered_follows: Vec::new(),
+            message_input: String::new(),
+            show_new_chat_form: false,
+            selected_chat_id: None,
+            show_new_group_form: false,
+            group_name_input: String::new(),
+            selected_group_members: Vec::new(),
+            show_my_profile: false,
+            profile_name_draft: String::new(),
+            profile_about_draft: String::new(),
+            show_group_info: false,
+            group_info_name_draft: String::new(),
+            group_info_npub_input: String::new(),
         }
-        if let Some(home) = std::env::var_os("HOME") {
-            return std::path::Path::new(&home)
-                .join(".pika-desktop")
-                .to_string_lossy()
-                .to_string();
-        }
-        ".pika-desktop".to_string()
     }
 
     fn clear_all_overlays(&mut self) {

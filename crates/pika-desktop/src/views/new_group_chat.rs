@@ -42,7 +42,7 @@ pub fn new_group_chat_view<'a>(
                 .iter()
                 .find(|e| e.npub == *npub)
                 .and_then(|e| e.name.clone())
-                .unwrap_or_else(|| truncated_npub(npub));
+                .unwrap_or_else(|| theme::truncated_npub(npub));
             let npub_clone = npub.clone();
             let mut chip = button(
                 text(format!("{label} \u{00d7}"))
@@ -178,7 +178,7 @@ fn follow_row_selectable<'a>(
 ) -> Element<'a, Message, Theme> {
     let name = entry.name.as_deref().unwrap_or("");
     let display_name = if name.is_empty() {
-        truncated_npub(&entry.npub)
+        theme::truncated_npub(&entry.npub)
     } else {
         name.to_string()
     };
@@ -199,7 +199,7 @@ fn follow_row_selectable<'a>(
 
     if !name.is_empty() {
         info = info.push(
-            text(truncated_npub(&entry.npub))
+            text(theme::truncated_npub(&entry.npub))
                 .size(11)
                 .color(theme::TEXT_FADED),
         );
@@ -238,11 +238,4 @@ fn follow_row_selectable<'a>(
     }
 
     btn.into()
-}
-
-fn truncated_npub(npub: &str) -> String {
-    if npub.len() <= 20 {
-        return npub.to_string();
-    }
-    format!("{}\u{2026}{}", &npub[..12], &npub[npub.len() - 4..])
 }

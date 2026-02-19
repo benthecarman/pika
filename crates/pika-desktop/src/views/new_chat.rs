@@ -110,7 +110,7 @@ fn follow_row<'a>(
 ) -> Element<'a, Message, Theme> {
     let name = entry.name.as_deref().unwrap_or("");
     let display_name = if name.is_empty() {
-        truncated_npub(&entry.npub)
+        theme::truncated_npub(&entry.npub)
     } else {
         name.to_string()
     };
@@ -129,7 +129,7 @@ fn follow_row<'a>(
 
     if !name.is_empty() {
         info = info.push(
-            text(truncated_npub(&entry.npub))
+            text(theme::truncated_npub(&entry.npub))
                 .size(11)
                 .color(theme::TEXT_FADED),
         );
@@ -158,11 +158,4 @@ fn follow_row<'a>(
     }
 
     btn.into()
-}
-
-fn truncated_npub(npub: &str) -> String {
-    if npub.len() <= 20 {
-        return npub.to_string();
-    }
-    format!("{}\u{2026}{}", &npub[..12], &npub[npub.len() - 4..])
 }

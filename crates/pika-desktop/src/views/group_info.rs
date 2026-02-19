@@ -120,7 +120,7 @@ fn member_row<'a>(
 ) -> Element<'a, Message, Theme> {
     let name = member.name.as_deref().unwrap_or("");
     let display_name = if name.is_empty() {
-        truncated_npub(&member.npub)
+        theme::truncated_npub(&member.npub)
     } else {
         name.to_string()
     };
@@ -170,11 +170,4 @@ fn member_row<'a>(
     }
 
     container(row_content).width(Fill).padding([8, 12]).into()
-}
-
-fn truncated_npub(npub: &str) -> String {
-    if npub.len() <= 20 {
-        return npub.to_string();
-    }
-    format!("{}\u{2026}{}", &npub[..12], &npub[npub.len() - 4..])
 }

@@ -81,7 +81,7 @@ pub fn my_profile_view<'a>(
 
     // ── npub display ────────────────────────────────────────────────
     let npub_row = row![
-        text(truncated_npub_long(npub))
+        text(theme::truncated_npub_long(npub))
             .size(12)
             .color(theme::TEXT_FADED),
         Space::new().width(Fill),
@@ -113,11 +113,4 @@ pub fn my_profile_view<'a>(
         .height(Fill)
         .style(theme::surface_style)
         .into()
-}
-
-fn truncated_npub_long(npub: &str) -> String {
-    if npub.len() <= 30 {
-        return npub.to_string();
-    }
-    format!("{}\u{2026}{}", &npub[..16], &npub[npub.len() - 8..])
 }
