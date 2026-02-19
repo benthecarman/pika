@@ -982,10 +982,12 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
               }
               const requireMention = oneOnOne ? false : resolveRequireMention(groupId, currentCfg);
               const wasMentioned = handle ? detectMention(ev.content, handle.pubkey, handle.npub, currentCfg) : false;
-              const senderName = await resolveMemberNameAsync(senderPk, currentCfg);
 
               if (requireMention && !wasMentioned) {
-                // Not mentioned — buffer for context, don't dispatch
+                // Not mentioned — buffer for context, don't dispatch.
+                // Use sync resolveMemberName (returns cached name or npub) to
+                // avoid the slow relay fetch just for history buffering.
+                const senderName = resolveMemberName(senderPk, currentCfg);
                 recordPendingHistory(historyKey, {
                   sender: senderName,
                   body: ev.content,
@@ -997,7 +999,11 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
                 return;
               }
 
-              // Mentioned (or mention not required) — dispatch with pending history
+              // Mentioned (or mention not required) — fire typing indicator
+              // eagerly before the expensive profile fetch + agent dispatch.
+              // Brief delay so it doesn't feel instantaneous / robotic.
+              setTimeout(() => { sidecar.sendTyping(ev.nostr_group_id).catch(() => {}); }, 500);
+
               const pendingHistory = flushPendingHistory(historyKey);
               ctx.log?.info(
                 `[${resolved.accountId}] group message dispatching (mentioned=${wasMentioned}) group=${ev.nostr_group_id} from=${senderPk} pendingHistory=${pendingHistory.length}`,
@@ -1030,6 +1036,9 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
               });
             } else {
               // DM / OWNER FLOW — route to main session (existing behavior)
+              // Fire typing eagerly before the expensive profile fetch + agent dispatch.
+              // Brief delay so it doesn't feel instantaneous / robotic.
+              setTimeout(() => { sidecar.sendTyping(ev.nostr_group_id).catch(() => {}); }, 500);
               await dispatchInboundToAgent({
                 runtime,
                 accountId: resolved.accountId,
