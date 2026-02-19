@@ -644,7 +644,7 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
         return groupAllowFrom.length > 0 && groupAllowFrom[0] === pk;
       };
       const allowedGroups = resolved.config.groups ?? {};
-      const activeCalls = new Map<string, { chatId: string; senderId: string }>();
+      const activeCalls = new Map<string, { chatId: string; senderId: string; responding: boolean }>();
       const callStartTtsText = String(process.env.MARMOT_CALL_START_TTS_TEXT ?? "").trim();
       const callStartTtsDelayMs = (() => {
         const raw = String(process.env.MARMOT_CALL_START_TTS_DELAY_MS ?? "").trim();
@@ -717,6 +717,7 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
 	          activeCalls.set(ev.call_id, {
 	            chatId: ev.nostr_group_id,
 	            senderId: ev.from_pubkey,
+	            responding: false,
 	          });
 	          ctx.log?.info(
 	            `[${resolved.accountId}] call_session_started group=${ev.nostr_group_id} from=${ev.from_pubkey} call_id=${ev.call_id}`,
@@ -779,6 +780,13 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
           if (!transcript) {
             return;
           }
+          if (callCtx.responding) {
+            ctx.log?.debug(
+              `[${resolved.accountId}] skip transcript while responding call_id=${ev.call_id} text=${JSON.stringify(transcript)}`,
+            );
+            return;
+          }
+          callCtx.responding = true;
           try {
             const currentCfg = runtime.config.loadConfig();
             await dispatchInboundToAgent({
@@ -827,6 +835,8 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
             ctx.log?.error(
               `[${resolved.accountId}] voice transcript dispatch failed call_id=${ev.call_id}: ${err}`,
             );
+          } finally {
+            callCtx.responding = false;
           }
           return;
         }
