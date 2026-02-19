@@ -105,9 +105,13 @@ pub fn open_mdk(data_dir: &str, pubkey: &PublicKey, keychain_group: &str) -> Res
         }
     };
 
-    Ok(MDK::builder(storage)
-        .with_config(MdkConfig::default())
-        .build())
+    Ok(MDK::builder(storage).with_config(mdk_config()).build())
+}
+
+fn mdk_config() -> MdkConfig {
+    MdkConfig {
+        ..Default::default()
+    }
 }
 
 #[cfg(all(target_os = "ios", target_env = "sim"))]
@@ -167,7 +171,5 @@ fn open_mdk_ios_file_key(data_dir: &str, pubkey: &PublicKey) -> Result<PikaMdk> 
                 )
             })?;
 
-    Ok(MDK::builder(storage)
-        .with_config(MdkConfig::default())
-        .build())
+    Ok(MDK::builder(storage).with_config(mdk_config()).build())
 }

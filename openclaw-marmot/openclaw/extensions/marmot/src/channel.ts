@@ -363,6 +363,7 @@ async function dispatchInboundToAgent(params: {
   groupName?: string;
   stateDir?: string;
   deliverText: (text: string) => Promise<void>;
+  sendTyping?: () => Promise<void>;
   log?: { error?: (msg: string) => void };
 }): Promise<void> {
   const { runtime, accountId, chatId, senderId, text, isOwner, isGroupChat, deliverText } = params;
@@ -430,6 +431,7 @@ async function dispatchInboundToAgent(params: {
         if (!replyText) return;
         await deliverText(replyText);
       },
+      onReplyStart: params.sendTyping,
       onError: (err, info) => {
         params.log?.error?.(
           `[${accountId}] reply dispatch error kind=${info.kind}: ${String(err)}`,
@@ -1040,10 +1042,12 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
               }
               const requireMention = oneOnOne ? false : resolveRequireMention(groupId, currentCfg);
               const wasMentioned = handle ? detectMention(ev.content, handle.pubkey, handle.npub, currentCfg) : false;
-              const senderName = await resolveMemberNameAsync(senderPk, currentCfg);
 
               if (requireMention && !wasMentioned) {
-                // Not mentioned — buffer for context, don't dispatch
+                // Not mentioned — buffer for context, don't dispatch.
+                // Use sync resolveMemberName (returns cached name or npub) to
+                // avoid the slow relay fetch just for history buffering.
+                const senderName = resolveMemberName(senderPk, currentCfg);
                 recordPendingHistory(historyKey, {
                   sender: senderName,
                   body: ev.content,
@@ -1055,7 +1059,11 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
                 return;
               }
 
-              // Mentioned (or mention not required) — dispatch with pending history
+              // Mentioned (or mention not required) — fire typing indicator
+              // eagerly before the expensive profile fetch + agent dispatch.
+              // Brief delay so it doesn't feel instantaneous / robotic.
+              setTimeout(() => { sidecar.sendTyping(ev.nostr_group_id).catch(() => {}); }, 500);
+
               const pendingHistory = flushPendingHistory(historyKey);
               ctx.log?.info(
                 `[${resolved.accountId}] group message dispatching (mentioned=${wasMentioned}) group=${ev.nostr_group_id} from=${senderPk} pendingHistory=${pendingHistory.length}`,
@@ -1079,10 +1087,18 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
                   );
                   await sidecar.sendMessage(ev.nostr_group_id, responseText);
                 },
+                sendTyping: async () => {
+                  await sidecar.sendTyping(ev.nostr_group_id).catch((err) => {
+                    ctx.log?.debug?.(`[${resolved.accountId}] typing indicator failed group=${ev.nostr_group_id}: ${err}`);
+                  });
+                },
                 log: ctx.log,
               });
             } else {
               // DM / OWNER FLOW — route to main session (existing behavior)
+              // Fire typing eagerly before the expensive profile fetch + agent dispatch.
+              // Brief delay so it doesn't feel instantaneous / robotic.
+              setTimeout(() => { sidecar.sendTyping(ev.nostr_group_id).catch(() => {}); }, 500);
               await dispatchInboundToAgent({
                 runtime,
                 accountId: resolved.accountId,
@@ -1096,6 +1112,11 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
                     `[${resolved.accountId}] send dm=${ev.nostr_group_id} len=${responseText.length}`,
                   );
                   await sidecar.sendMessage(ev.nostr_group_id, responseText);
+                },
+                sendTyping: async () => {
+                  await sidecar.sendTyping(ev.nostr_group_id).catch((err) => {
+                    ctx.log?.debug?.(`[${resolved.accountId}] typing indicator failed dm=${ev.nostr_group_id}: ${err}`);
+                  });
                 },
                 log: ctx.log,
               });

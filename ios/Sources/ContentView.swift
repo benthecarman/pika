@@ -231,6 +231,9 @@ private func screenView(
             },
             onReact: { messageId, emoji in
                 manager.dispatch(.reactToMessage(chatId: chatId, messageId: messageId, emoji: emoji))
+            },
+            onTypingStarted: {
+                manager.dispatch(.typingStarted(chatId: chatId))
             }
         )
         .onAppear {

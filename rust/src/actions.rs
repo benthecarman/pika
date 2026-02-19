@@ -91,6 +91,9 @@ pub enum AppAction {
         message_id: String,
         emoji: String,
     },
+    TypingStarted {
+        chat_id: String,
+    },
 
     // UI
     ClearToast,
@@ -158,6 +161,7 @@ impl AppAction {
             // Chat management
             AppAction::ArchiveChat { .. } => "ArchiveChat",
             AppAction::ReactToMessage { .. } => "ReactToMessage",
+            AppAction::TypingStarted { .. } => "TypingStarted",
 
             // UI
             AppAction::ClearToast => "ClearToast",

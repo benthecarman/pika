@@ -182,6 +182,13 @@ pub struct ChatViewState {
     pub is_admin: bool,
     pub messages: Vec<ChatMessage>,
     pub can_load_older: bool,
+    pub typing_members: Vec<TypingMember>,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct TypingMember {
+    pub pubkey: String,
+    pub name: Option<String>,
 }
 
 #[derive(uniffi::Record, Clone, Debug)]

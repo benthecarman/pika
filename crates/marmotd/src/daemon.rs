@@ -66,6 +66,11 @@ enum InCmd {
         nostr_group_id: String,
         content: String,
     },
+    SendTyping {
+        #[serde(default)]
+        request_id: Option<String>,
+        nostr_group_id: String,
+    },
     AcceptCall {
         #[serde(default)]
         request_id: Option<String>,
@@ -1772,6 +1777,12 @@ fn parse_relay_list(relay: &str, relays_override: &[String]) -> anyhow::Result<V
     Ok(out)
 }
 
+const TYPING_INDICATOR_KIND: Kind = Kind::Custom(20_067);
+
+fn is_typing_indicator(msg: &mdk_storage_traits::messages::types::Message) -> bool {
+    msg.kind == TYPING_INDICATOR_KIND && msg.content == "typing"
+}
+
 fn event_h_tag_hex(ev: &Event) -> Option<String> {
     for t in ev.tags.iter() {
         if t.kind() == TagKind::h()
@@ -2062,6 +2073,9 @@ pub async fn daemon_main(
                                                         if !sender_allowed(&msg.pubkey.to_hex()) {
                                                             continue;
                                                         }
+                                                        if is_typing_indicator(&msg) {
+                                                            continue;
+                                                        }
                                                         out_tx.send(OutMsg::MessageReceived{
                                                             nostr_group_id: event_h_tag_hex(ev).unwrap_or_else(|| nostr_group_id_hex.clone()),
                                                             from_pubkey: msg.pubkey.to_hex().to_lowercase(),
@@ -2165,6 +2179,69 @@ pub async fn daemon_main(
                                 let _ = out_tx.send(out_error(request_id, "publish_failed", format!("{e:#}")));
                             }
                         }
+                    }
+                    InCmd::SendTyping { request_id, nostr_group_id } => {
+                        let group_id_bytes = match hex::decode(&nostr_group_id) {
+                            Ok(b) => b,
+                            Err(_) => {
+                                out_tx.send(out_error(request_id, "bad_group_id", "nostr_group_id must be hex")).ok();
+                                continue;
+                            }
+                        };
+                        if group_id_bytes.len() != 32 {
+                            out_tx.send(out_error(request_id, "bad_group_id", "nostr_group_id must be 32 bytes hex")).ok();
+                            continue;
+                        }
+                        let groups = mdk.get_groups().context("get_groups")?;
+                        let found = groups.iter().find(|g| g.nostr_group_id.as_slice() == group_id_bytes.as_slice());
+                        let Some(g) = found else {
+                            out_tx.send(out_error(request_id, "not_found", "group not found")).ok();
+                            continue;
+                        };
+                        let mls_group_id = g.mls_group_id.clone();
+
+                        let expires_at = Timestamp::now().as_secs() + 10;
+                        let rumor = UnsignedEvent::new(
+                            keys.public_key(),
+                            Timestamp::now(),
+                            TYPING_INDICATOR_KIND,
+                            [
+                                Tag::custom(TagKind::d(), ["pika"]),
+                                Tag::expiration(Timestamp::from_secs(expires_at)),
+                            ],
+                            "typing",
+                        );
+
+                        let options = CreateMessageOptions {
+                            skip_storage: true,
+                        };
+
+                        let wrapper = match mdk.create_message_with_options(&mls_group_id, rumor, options) {
+                            Ok(ev) => ev,
+                            Err(e) => {
+                                out_tx.send(out_error(request_id, "mdk_error", format!("{e:#}"))).ok();
+                                continue;
+                            }
+                        };
+
+                        if relay_urls.is_empty() {
+                            out_tx.send(out_error(request_id, "bad_relays", "no relays configured")).ok();
+                            continue;
+                        }
+                        // Fire-and-forget: typing indicators are best-effort
+                        let client_clone = client.clone();
+                        let relay_urls_clone = relay_urls.clone();
+                        let out_tx_clone = out_tx.clone();
+                        tokio::spawn(async move {
+                            match publish_and_confirm_multi(&client_clone, &relay_urls_clone, &wrapper, "daemon_typing").await {
+                                Ok(_) => {
+                                    let _ = out_tx_clone.send(out_ok(request_id, None));
+                                }
+                                Err(e) => {
+                                    let _ = out_tx_clone.send(out_error(request_id, "publish_failed", format!("{e:#}")));
+                                }
+                            }
+                        });
                     }
                     InCmd::AcceptCall { request_id, call_id } => {
                         if active_call.is_some() {
@@ -2796,6 +2873,9 @@ pub async fn daemon_main(
                                         }
                                     }
                                 }
+                                continue;
+                            }
+                            if is_typing_indicator(&msg) {
                                 continue;
                             }
                             out_tx.send(OutMsg::MessageReceived {
