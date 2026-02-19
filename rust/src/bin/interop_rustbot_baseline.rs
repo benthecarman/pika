@@ -98,6 +98,7 @@ fn main() -> Result<()> {
     app.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: "ping".to_string(),
+        kind: None,
     });
 
     // Expect the peer to reply "pong".

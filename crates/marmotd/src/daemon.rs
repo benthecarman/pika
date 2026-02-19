@@ -810,6 +810,30 @@ async fn publish_group_message(
     content: String,
     label: &str,
 ) -> anyhow::Result<()> {
+    publish_group_event(
+        client,
+        relay_urls,
+        mdk,
+        keys,
+        nostr_group_id,
+        Kind::ChatMessage,
+        content,
+        label,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn publish_group_event(
+    client: &Client,
+    relay_urls: &[RelayUrl],
+    mdk: &MDK<MdkSqliteStorage>,
+    keys: &Keys,
+    nostr_group_id: &str,
+    kind: Kind,
+    content: String,
+    label: &str,
+) -> anyhow::Result<()> {
     let group_id_bytes = hex::decode(nostr_group_id).context("decode nostr_group_id")?;
     if group_id_bytes.len() != 32 {
         return Err(anyhow!("nostr_group_id must be 32 bytes hex"));
@@ -823,7 +847,7 @@ async fn publish_group_message(
             "group not found for nostr_group_id={nostr_group_id}"
         ));
     };
-    let rumor = EventBuilder::new(Kind::Custom(9), content).build(keys.public_key());
+    let rumor = EventBuilder::new(kind, content).build(keys.public_key());
     let msg_event = mdk
         .create_message(&group.mls_group_id, rumor)
         .context("create_message")?;
@@ -853,12 +877,13 @@ async fn send_call_signal(
     label: &str,
 ) -> anyhow::Result<()> {
     let payload = build_call_signal_json(call_id, signal)?;
-    publish_group_message(
+    publish_group_event(
         client,
         relay_urls,
         mdk,
         keys,
         nostr_group_id,
+        Kind::Custom(10),
         payload,
         label,
     )
@@ -2142,7 +2167,7 @@ pub async fn daemon_main(
                         };
                         let mls_group_id = g.mls_group_id.clone();
 
-                        let rumor = EventBuilder::new(Kind::Custom(9), content).build(keys.public_key());
+                        let rumor = EventBuilder::new(Kind::ChatMessage, content).build(keys.public_key());
                         let msg_event = match mdk.create_message(&mls_group_id, rumor) {
                             Ok(ev) => ev,
                             Err(e) => {

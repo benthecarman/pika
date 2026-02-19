@@ -186,6 +186,7 @@ fn alice_sends_bob_over_public_relays() {
     alice.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: "hi-from-alice-public".into(),
+        kind: None,
     });
 
     wait_until(

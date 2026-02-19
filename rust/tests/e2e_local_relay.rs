@@ -558,6 +558,7 @@ fn alice_sends_bob_receives_over_local_relay() {
     alice.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: "hi-from-alice".into(),
+        kind: None,
     });
 
     // Alice should mark the message as Sent after OK from relay.
@@ -772,6 +773,7 @@ fn send_failure_then_retry_succeeds_over_local_relay() {
     app.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: content.into(),
+        kind: None,
     });
 
     wait_until(
@@ -997,6 +999,7 @@ fn call_invite_accept_end_flow_over_local_relay() {
     bob.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: second_invite,
+        kind: None,
     });
     wait_until(
         "alice keeps original active call id",
@@ -1183,6 +1186,7 @@ fn call_invite_with_invalid_relay_auth_is_rejected() {
     bob.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: bad_invite,
+        kind: Some(10),
     });
 
     wait_until(
@@ -1281,6 +1285,7 @@ fn duplicate_group_message_does_not_duplicate_in_ui() {
     alice.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: content.clone(),
+        kind: None,
     });
 
     wait_until("bob received message", Duration::from_secs(20), || {

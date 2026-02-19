@@ -311,7 +311,7 @@ async fn cmd_send(cli: &Cli, nostr_group_id_hex: &str, content: &str) -> anyhow:
     let relays = relay_util::parse_relay_urls(&cli.relay)?;
 
     let group = find_group(&mdk, nostr_group_id_hex)?;
-    let rumor = EventBuilder::new(Kind::Custom(9), content).build(keys.public_key());
+    let rumor = EventBuilder::new(Kind::ChatMessage, content).build(keys.public_key());
     let msg_event = mdk
         .create_message(&group.mls_group_id, rumor)
         .context("create message")?;

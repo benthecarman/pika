@@ -24,6 +24,8 @@ pub enum PushNotificationResult {
     Suppress,
 }
 
+const CALL_SIGNAL_KIND: Kind = Kind::Custom(10);
+
 #[uniffi::export]
 pub fn decrypt_push_notification(
     data_dir: String,
@@ -47,18 +49,13 @@ pub fn decrypt_push_notification(
         _ => return None,
     };
 
-    // only give push notifications for chat messages
-    if msg.kind != Kind::Custom(9) {
+    // Only give push notifications for chat messages and call signals.
+    if msg.kind != Kind::ChatMessage && msg.kind != CALL_SIGNAL_KIND {
         return Some(PushNotificationResult::Suppress);
     }
 
     // Don't notify for self-messages.
     if msg.pubkey == pubkey {
-        return Some(PushNotificationResult::Suppress);
-    }
-
-    // Don't notify for call signals.
-    if is_call_signal_payload(&msg.content) {
         return Some(PushNotificationResult::Suppress);
     }
 
@@ -144,15 +141,3 @@ fn resolve_sender_profile(data_dir: &str, pubkey_hex: &str) -> (String, Option<S
     (name, picture_url)
 }
 
-/// Minimal check for call signal payloads without pulling in heavy call_control deps.
-/// Matches `{"v":1,"ns":"pika.call",...}`.
-fn is_call_signal_payload(content: &str) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Probe {
-        v: u8,
-        ns: String,
-    }
-    serde_json::from_str::<Probe>(content)
-        .map(|p| p.v == 1 && p.ns == "pika.call")
-        .unwrap_or(false)
-}

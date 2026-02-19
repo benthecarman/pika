@@ -188,6 +188,7 @@ fn call_deployed_bot_via_ffi_app() {
     app.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: ping,
+        kind: None,
     });
     wait_until("bot pong", Duration::from_secs(30), || {
         app.state()

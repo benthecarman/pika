@@ -464,6 +464,7 @@ fn main() {
     app.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: ping,
+        kind: None,
     });
     let ping_window = Duration::from_secs(30);
     let ping_start = Instant::now();
@@ -507,6 +508,7 @@ fn main() {
         app.dispatch(AppAction::SendMessage {
             chat_id: chat_id.clone(),
             content: probe,
+            kind: None,
         });
         std::thread::sleep(Duration::from_millis(500));
     }

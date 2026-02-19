@@ -383,7 +383,7 @@ async fn scenario_invite_and_chat_peer(
     let expected = format!("E2E_OK_{token}");
     info!("[phase4] prompt={prompt}");
 
-    let a_rumor = EventBuilder::new(Kind::Custom(9), prompt).build(a_keys.public_key());
+    let a_rumor = EventBuilder::new(Kind::ChatMessage, prompt).build(a_keys.public_key());
     let a_msg_event = a_mdk
         .create_message(&mls_group_id, a_rumor)
         .context("A create_message")?;
@@ -585,7 +585,7 @@ async fn scenario_invite_and_chat(
     let a_sub = subscribe_group_msgs(&a_client, &nostr_group_id_hex).await?;
     let b_sub = subscribe_group_msgs(&b_client, &nostr_group_id_hex).await?;
 
-    let a_rumor = EventBuilder::new(Kind::Custom(9), a_to_b.clone()).build(a_keys.public_key());
+    let a_rumor = EventBuilder::new(Kind::ChatMessage, a_to_b.clone()).build(a_keys.public_key());
     let a_msg_event = a_mdk
         .create_message(&mls_group_id, a_rumor)
         .context("A create_message")?;
@@ -607,7 +607,7 @@ async fn scenario_invite_and_chat(
         b_received.content
     );
 
-    let b_rumor = EventBuilder::new(Kind::Custom(9), b_to_a.clone()).build(b_keys.public_key());
+    let b_rumor = EventBuilder::new(Kind::ChatMessage, b_to_a.clone()).build(b_keys.public_key());
     let b_msg_event = b_mdk
         .create_message(&mls_group_id, b_rumor)
         .context("B create_message")?;
@@ -768,7 +768,7 @@ async fn scenario_invite_and_chat_rustbot(
     let expected = format!("E2E_OK_{token}");
     info!("[phase2] prompt={prompt}");
 
-    let a_rumor = EventBuilder::new(Kind::Custom(9), prompt).build(a_keys.public_key());
+    let a_rumor = EventBuilder::new(Kind::ChatMessage, prompt).build(a_keys.public_key());
     let a_msg_event = a_mdk
         .create_message(&mls_group_id, a_rumor)
         .context("A create_message")?;
@@ -1018,7 +1018,7 @@ async fn scenario_invite_and_chat_daemon(
     let expected = format!("E2E_OK_{token}");
     info!("[phase3] prompt={prompt}");
 
-    let a_rumor = EventBuilder::new(Kind::Custom(9), prompt.clone()).build(a_keys.public_key());
+    let a_rumor = EventBuilder::new(Kind::ChatMessage, prompt.clone()).build(a_keys.public_key());
     let a_msg_event = a_mdk
         .create_message(&mls_group_id, a_rumor)
         .context("A create_message")?;
@@ -1218,7 +1218,7 @@ async fn bot_main(
 
                 println!("[openclaw_bot] replying content={reply}");
                 let reply_rumor =
-                    EventBuilder::new(Kind::Custom(9), reply.clone()).build(keys.public_key());
+                    EventBuilder::new(Kind::ChatMessage, reply.clone()).build(keys.public_key());
                 let reply_event = mdk
                     .create_message(&mls_group_id, reply_rumor)
                     .context("bot create_message")?;

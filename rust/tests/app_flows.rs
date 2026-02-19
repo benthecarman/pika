@@ -137,6 +137,7 @@ fn send_message_creates_pending_then_sent() {
     app.dispatch(AppAction::SendMessage {
         chat_id,
         content: "hello".into(),
+        kind: None,
     });
     wait_until("message appears", Duration::from_secs(2), || {
         app.state()
@@ -336,6 +337,7 @@ fn restore_session_recovers_chat_history() {
     app.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: "persist-me".into(),
+        kind: None,
     });
     wait_until("message persisted", Duration::from_secs(2), || {
         app.state()
@@ -428,6 +430,7 @@ fn paging_loads_older_messages_in_pages() {
         app.dispatch(AppAction::SendMessage {
             chat_id: chat_id.clone(),
             content: format!("m{i}"),
+            kind: None,
         });
     }
     wait_until(

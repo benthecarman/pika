@@ -583,6 +583,7 @@ fn run_marmotd_call_test(relay_url: &str, moq_url: &str) {
     caller.dispatch(AppAction::SendMessage {
         chat_id: chat_id.clone(),
         content: ping_msg.clone(),
+        kind: None,
     });
 
     // Daemon should receive the message.

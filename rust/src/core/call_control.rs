@@ -172,9 +172,6 @@ pub(super) fn parse_call_signal(content: &str) -> Option<ParsedCallSignal> {
     }
 }
 
-pub(super) fn is_call_signal_payload(content: &str) -> bool {
-    parse_call_signal(content).is_some()
-}
 
 fn build_call_signal_json(
     call_id: &str,
@@ -467,7 +464,7 @@ impl AppCore {
             let rumor = UnsignedEvent::new(
                 sess.keys.public_key(),
                 Timestamp::from(now_seconds() as u64),
-                Kind::Custom(9),
+                super::CALL_SIGNAL_KIND,
                 [],
                 payload_json,
             );
@@ -1038,7 +1035,6 @@ mod tests {
     fn ignores_non_call_json() {
         let msg = r#"{"foo":"bar"}"#;
         assert!(parse_call_signal(msg).is_none());
-        assert!(!is_call_signal_payload(msg));
     }
 
     #[test]

@@ -90,6 +90,7 @@ const DEFAULT_GROUP_DESCRIPTION: &str = "";
 const IOS_MIGRATION_SENTINEL: &str = ".migrated_to_app_group";
 
 const TYPING_INDICATOR_KIND: Kind = Kind::Custom(20_067);
+pub(crate) const CALL_SIGNAL_KIND: Kind = Kind::Custom(10);
 
 const LOCAL_OUTBOX_MAX_PER_CHAT: usize = 8;
 
@@ -1566,22 +1567,34 @@ impl AppCore {
                 let mut app_sender: Option<PublicKey> = None;
                 let mut app_content: Option<String> = None;
                 let mut is_typing_indicator = false;
+                let mut is_call_signal_kind = false;
 
                 let mls_group_id: Option<GroupId> = match &result {
                     MessageProcessingResult::ApplicationMessage(msg) => {
-                        // Detect typing indicator: kind 20_067, content "typing", d tag "pika"
-                        if msg.kind == TYPING_INDICATOR_KIND
-                            && msg.content == "typing"
-                            && msg.tags.iter().any(|t| {
-                                t.kind() == TagKind::d()
-                                    && t.content().map(|c| c == "pika").unwrap_or(false)
-                            })
-                        {
-                            is_typing_indicator = true;
-                            app_sender = Some(msg.pubkey);
-                        } else {
-                            app_sender = Some(msg.pubkey);
-                            app_content = Some(msg.content.clone());
+                        match msg.kind {
+                            Kind::Custom(20_067)
+                                if msg.content == "typing"
+                                    && msg.tags.iter().any(|t| {
+                                        t.kind() == TagKind::d()
+                                            && t.content().map(|c| c == "pika").unwrap_or(false)
+                                    }) =>
+                            {
+                                is_typing_indicator = true;
+                                app_sender = Some(msg.pubkey);
+                            }
+                            Kind::Custom(10) => {
+                                is_call_signal_kind = true;
+                                app_sender = Some(msg.pubkey);
+                                app_content = Some(msg.content.clone());
+                            }
+                            Kind::ChatMessage | Kind::Reaction => {
+                                app_sender = Some(msg.pubkey);
+                                app_content = Some(msg.content.clone());
+                            }
+                            kind => {
+                                tracing::warn!(?kind, "ignoring app message with unknown kind");
+                                return;
+                            }
                         }
                         Some(msg.mls_group_id.clone())
                     }
@@ -1632,14 +1645,18 @@ impl AppCore {
                                 self.update_typing(&chat_id, &sender.to_hex(), 0);
                             }
 
-                            let mut is_call_signal = false;
-                            if let (Some(sender), Some(content)) =
-                                (app_sender, app_content.as_deref())
-                            {
-                                if let Some(signal) = self.maybe_parse_call_signal(&sender, content)
+                            let is_call_signal = is_call_signal_kind;
+                            if is_call_signal_kind {
+                                if let (Some(sender), Some(content)) =
+                                    (app_sender, app_content.as_deref())
                                 {
-                                    self.handle_incoming_call_signal(&chat_id, &sender, signal);
-                                    is_call_signal = true;
+                                    if let Some(signal) =
+                                        self.maybe_parse_call_signal(&sender, content)
+                                    {
+                                        self.handle_incoming_call_signal(
+                                            &chat_id, &sender, signal,
+                                        );
+                                    }
                                 }
                             }
 
@@ -2098,17 +2115,21 @@ impl AppCore {
                 self.refresh_current_chat(&chat_id);
                 self.emit_router();
             }
-            AppAction::SendMessage { chat_id, content } => {
+            AppAction::SendMessage { chat_id, content, kind } => {
                 if !self.is_logged_in() {
                     self.toast("Please log in first");
                     return;
                 }
                 let network_enabled = self.network_enabled();
                 let fallback_relays = self.default_relays();
+                
+                let kind = kind.map(Kind::from).unwrap_or(Kind::ChatMessage);
+           
                 let content = content.trim().to_string();
                 if content.is_empty() {
                     return;
                 }
+                
 
                 // Nostr timestamps are second-granularity; rapid sends can share the same second.
                 // Keep outgoing timestamps monotonic to avoid tie-related paging nondeterminism.
@@ -2134,7 +2155,7 @@ impl AppCore {
                     let mut rumor = UnsignedEvent::new(
                         sess.keys.public_key(),
                         Timestamp::from(ts as u64),
-                        Kind::Custom(9),
+                        kind,
                         [],
                         content.clone(),
                     );
