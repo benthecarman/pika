@@ -1797,6 +1797,23 @@ impl AppCore {
                     self.refresh_follow_list();
                 }
             }
+            AppAction::ReloadConfig => {
+                self.config = config::load_app_config(&self.data_dir);
+
+                if !self.network_enabled() {
+                    self.toast("Config reloaded (network disabled)");
+                    return;
+                }
+
+                if self.is_logged_in() {
+                    self.publish_key_package_relays_best_effort();
+                    self.ensure_key_package_published_best_effort();
+                    self.recompute_subscriptions();
+                    self.refresh_follow_list();
+                }
+
+                self.toast("Relay config reloaded");
+            }
             AppAction::OpenPeerProfile { pubkey } => {
                 if !self.is_logged_in() {
                     return;

@@ -184,10 +184,14 @@ impl AppManager {
     }
 
     pub fn reset_relay_config_to_defaults(&self) {
-        let _ = std::fs::write(
+        if std::fs::write(
             self.inner.data_dir.join("pika_config.json"),
             pika_core::default_config_json(),
-        );
+        )
+        .is_ok()
+        {
+            self.inner.core.dispatch(AppAction::ReloadConfig);
+        }
     }
 }
 

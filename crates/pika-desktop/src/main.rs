@@ -179,7 +179,6 @@ impl DesktopApp {
             Message::ResetRelayConfig => {
                 if let Some(manager) = &self.manager {
                     manager.reset_relay_config_to_defaults();
-                    manager.dispatch(AppAction::ClearToast);
                 }
             }
             Message::NewChatChanged(value) => self.new_chat_input = value,
