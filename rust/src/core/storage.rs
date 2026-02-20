@@ -102,10 +102,7 @@ impl AppCore {
                 .mdk
                 .get_messages(&g.mls_group_id, Some(Pagination::new(Some(20), Some(0))))
                 .ok()
-                .and_then(|v| {
-                    v.into_iter()
-                        .find(|m| m.kind != CALL_SIGNAL_KIND)
-                });
+                .and_then(|v| v.into_iter().find(|m| m.kind != CALL_SIGNAL_KIND));
 
             let stored_last_message = newest.as_ref().map(|m| m.content.clone());
             let stored_last_message_at = newest

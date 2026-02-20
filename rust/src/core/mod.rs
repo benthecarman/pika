@@ -1653,9 +1653,7 @@ impl AppCore {
                                     if let Some(signal) =
                                         self.maybe_parse_call_signal(&sender, content)
                                     {
-                                        self.handle_incoming_call_signal(
-                                            &chat_id, &sender, signal,
-                                        );
+                                        self.handle_incoming_call_signal(&chat_id, &sender, signal);
                                     }
                                 }
                             }
@@ -2115,21 +2113,24 @@ impl AppCore {
                 self.refresh_current_chat(&chat_id);
                 self.emit_router();
             }
-            AppAction::SendMessage { chat_id, content, kind } => {
+            AppAction::SendMessage {
+                chat_id,
+                content,
+                kind,
+            } => {
                 if !self.is_logged_in() {
                     self.toast("Please log in first");
                     return;
                 }
                 let network_enabled = self.network_enabled();
                 let fallback_relays = self.default_relays();
-                
+
                 let kind = kind.map(Kind::from).unwrap_or(Kind::ChatMessage);
-           
+
                 let content = content.trim().to_string();
                 if content.is_empty() {
                     return;
                 }
-                
 
                 // Nostr timestamps are second-granularity; rapid sends can share the same second.
                 // Keep outgoing timestamps monotonic to avoid tie-related paging nondeterminism.

@@ -172,7 +172,6 @@ pub(super) fn parse_call_signal(content: &str) -> Option<ParsedCallSignal> {
     }
 }
 
-
 fn build_call_signal_json(
     call_id: &str,
     outgoing: OutgoingCallSignal<'_>,
