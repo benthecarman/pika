@@ -400,7 +400,7 @@ android-ui-e2e-local:
 android-ui-e2e:
   ./tools/ui-e2e-public --platform android
 
-# Create + push version tag (vX.Y.Z) after validating VERSION and clean tree.
+# Create + push version tag (pika/vX.Y.Z) after validating VERSION and clean tree.
 release VERSION:
   set -euo pipefail; \
   branch="$(git rev-parse --abbrev-ref HEAD)"; \
@@ -420,7 +420,7 @@ release VERSION:
     git status --short; \
     exit 1; \
   fi; \
-  tag="v$release_version"; \
+  tag="pika/v$release_version"; \
   if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then \
     echo "error: tag already exists: $tag"; \
     exit 1; \
