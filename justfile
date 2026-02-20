@@ -550,13 +550,13 @@ ios-appstore: ios-xcframework ios-xcodeproj
 # Build iOS app for simulator.
 ios-build-sim: ios-xcframework ios-xcodeproj
   SIM_ARCH="${PIKA_IOS_SIM_ARCH:-$( [ "$(uname -m)" = "x86_64" ] && echo x86_64 || echo arm64 )}"; \
-  ./tools/xcode-run xcodebuild -project ios/Pika.xcodeproj -scheme Pika -configuration Debug -sdk iphonesimulator -derivedDataPath ios/build build ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-com.justinmoon.pika.dev}"
+  ./tools/xcode-run xcodebuild -project ios/Pika.xcodeproj -scheme Pika -configuration Debug -sdk iphonesimulator -derivedDataPath ios/build build ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-org.pikachat.pika.dev}"
 
 # Run iOS UI tests on simulator (skips E2E deployed-bot test).
 ios-ui-test: ios-xcframework ios-xcodeproj
   udid="$(./tools/ios-sim-ensure | sed -n 's/^ok: ios simulator ready (udid=\(.*\))$/\1/p')"; \
   if [ -z "$udid" ]; then echo "error: could not determine simulator udid"; exit 1; fi; \
-  ./tools/xcode-run xcodebuild -project ios/Pika.xcodeproj -scheme Pika -derivedDataPath ios/build -destination "id=$udid" test ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-com.justinmoon.pika.dev}" \
+  ./tools/xcode-run xcodebuild -project ios/Pika.xcodeproj -scheme Pika -derivedDataPath ios/build -destination "id=$udid" test ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-org.pikachat.pika.dev}" \
     -skip-testing:PikaUITests/PikaUITests/testE2E_deployedRustBot_pingPong
 
 # iOS E2E: local Nostr relay + local Rust bot.
@@ -574,12 +574,12 @@ device:
 # Show Android manual QA instructions.
 android-manual-qa:
   @echo "Manual QA prompt: prompts/android-agent-device-manual-qa.md"
-  @echo "Tip: run `npx --yes agent-device --platform android open com.justinmoon.pika.dev` then follow the prompt."
+  @echo "Tip: run `npx --yes agent-device --platform android open org.pikachat.pika.dev` then follow the prompt."
 
 # Show iOS manual QA instructions.
 ios-manual-qa:
   @echo "Manual QA prompt: prompts/ios-agent-device-manual-qa.md"
-  @echo "Tip: run `./tools/agent-device --platform ios open com.justinmoon.pika.dev` then follow the prompt."
+  @echo "Tip: run `./tools/agent-device --platform ios open org.pikachat.pika.dev` then follow the prompt."
 
 # Build, install, and launch Android app on emulator/device.
 run-android *ARGS:
