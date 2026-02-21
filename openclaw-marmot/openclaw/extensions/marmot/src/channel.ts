@@ -16,6 +16,70 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+/**
+ * Transcribe a WAV audio chunk using openclaw's media-understanding framework
+ * via runtime.stt.transcribeAudioFile. Falls back to direct OpenAI-compatible
+ * fetch if the runtime method is not available (older openclaw versions).
+ */
+async function transcribeAudioChunk(params: {
+  audioPath: string;
+  runtime: ReturnType<typeof getMarmotRuntime>;
+  log?: { info?: (msg: string) => void; error?: (msg: string) => void; debug?: (msg: string) => void; warn?: (msg: string) => void };
+  accountId: string;
+  callId: string;
+}): Promise<string | undefined> {
+  const { audioPath, runtime, log, accountId, callId } = params;
+  const cfg = runtime.config.loadConfig();
+
+  // Prefer runtime.stt if available (openclaw >= 2026.2.x with STT support)
+  const stt = (runtime as any).stt;
+  if (stt?.transcribeAudioFile) {
+    const result = await stt.transcribeAudioFile({ filePath: audioPath, cfg });
+    const text = result?.text?.trim();
+    if (text) {
+      log?.info?.(`[${accountId}] transcribed call_id=${callId} text_len=${text.length}`);
+    }
+    return text || undefined;
+  }
+
+  // Fallback: direct fetch to OpenAI-compatible endpoint
+  log?.debug?.(`[${accountId}] runtime.stt not available, using direct fetch fallback`);
+  const apiKey = process.env.OPENAI_API_KEY?.trim() ?? process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    log?.warn?.(`[${accountId}] no STT provider configured (set OPENAI_API_KEY or upgrade openclaw for runtime.stt) call_id=${callId}`);
+    return undefined;
+  }
+
+  const isGroq = !process.env.OPENAI_API_KEY?.trim() && !!process.env.GROQ_API_KEY?.trim();
+  const baseUrl = isGroq ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1";
+  const model = isGroq ? "whisper-large-v3-turbo" : "gpt-4o-mini-transcribe";
+
+  const wavBuffer = readFileSync(audioPath);
+  const formData = new FormData();
+  formData.append("file", new Blob([wavBuffer], { type: "audio/wav" }), "audio.wav");
+  formData.append("model", model);
+  formData.append("response_format", "json");
+
+  const resp = await fetch(`${baseUrl}/audio/transcriptions`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${apiKey}` },
+    body: formData,
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`STT failed status=${resp.status} body=${body.slice(0, 200)}`);
+  }
+
+  const json: any = await resp.json();
+  const text = typeof json.text === "string" ? json.text.trim() : "";
+  if (text) {
+    log?.info?.(`[${accountId}] transcribed call_id=${callId} provider=${isGroq ? "groq" : "openai"} model=${model} text_len=${text.length}`);
+  }
+  return text || undefined;
+}
+
 type MarmotSidecarHandle = {
   sidecar: MarmotSidecar;
   pubkey: string;
@@ -861,31 +925,43 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
           );
           return;
         }
-        if (ev.type === "call_transcript_partial") {
-          ctx.log?.debug(
-            `[${resolved.accountId}] call_transcript_partial call_id=${ev.call_id} text=${JSON.stringify(ev.text)}`,
-          );
-          return;
-        }
-        if (ev.type === "call_transcript_final") {
+        if (ev.type === "call_audio_chunk") {
           ctx.log?.info(
-            `[${resolved.accountId}] call_transcript_final call_id=${ev.call_id} text=${JSON.stringify(ev.text)}`,
+            `[${resolved.accountId}] call_audio_chunk call_id=${ev.call_id} path=${ev.audio_path}`,
           );
           const callCtx = activeCalls.get(ev.call_id);
           if (!callCtx) {
             ctx.log?.debug(
-              `[${resolved.accountId}] call_transcript_final with no active call context call_id=${ev.call_id}`,
+              `[${resolved.accountId}] call_audio_chunk with no active call context call_id=${ev.call_id}`,
             );
-            return;
-          }
-          const transcript = ev.text?.trim();
-          if (!transcript) {
             return;
           }
           if (callCtx.responding) {
             ctx.log?.debug(
-              `[${resolved.accountId}] skip transcript while responding call_id=${ev.call_id} text=${JSON.stringify(transcript)}`,
+              `[${resolved.accountId}] skip audio chunk while responding call_id=${ev.call_id}`,
             );
+            return;
+          }
+          // Transcribe the audio chunk using openclaw's media-understanding provider
+          let transcript: string | undefined;
+          try {
+            transcript = await transcribeAudioChunk({
+              audioPath: ev.audio_path,
+              runtime,
+              log: ctx.log,
+              accountId: resolved.accountId,
+              callId: ev.call_id,
+            });
+          } catch (err) {
+            ctx.log?.error(
+              `[${resolved.accountId}] audio transcription failed call_id=${ev.call_id}: ${err}`,
+            );
+            return;
+          } finally {
+            // Clean up temp WAV file
+            try { rmSync(ev.audio_path, { force: true }); } catch {}
+          }
+          if (!transcript?.trim()) {
             return;
           }
           callCtx.responding = true;
@@ -896,7 +972,9 @@ export const marmotPlugin: ChannelPlugin<ResolvedMarmotAccount> = {
               accountId: resolved.accountId,
               senderId: callCtx.senderId,
               chatId: callCtx.chatId,
-              text: transcript,
+              text: transcript.trim(),
+              isOwner: isOwnerPubkey(callCtx.senderId.toLowerCase()),
+              isGroupChat: false,
               deliverText: async (responseText: string) => {
                 ctx.log?.info(
                   `[${resolved.accountId}] call TTS response call_id=${ev.call_id} text_len=${responseText.length}`,
