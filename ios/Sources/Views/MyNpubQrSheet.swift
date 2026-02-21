@@ -12,12 +12,18 @@ struct MyNpubQrSheet: View {
     let onSaveProfile: @MainActor (_ name: String, _ about: String) -> Void
     let onUploadPhoto: @MainActor (_ data: Data, _ mimeType: String) -> Void
     let onLogout: @MainActor () -> Void
+    let isDeveloperModeEnabledProvider: @MainActor () -> Bool
+    let onEnableDeveloperMode: @MainActor () -> Void
+    let onWipeLocalData: @MainActor () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var showNsec = false
     @State private var showLogoutConfirm: Bool
+    @State private var showWipeLocalDataConfirm = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var isLoadingPhoto = false
+    @State private var appVersionTapCount = 0
+    @State private var developerModeEnabled = false
     @State private var nameDraft = ""
     @State private var aboutDraft = ""
     @State private var didSyncDrafts = false
@@ -38,6 +44,9 @@ struct MyNpubQrSheet: View {
         onSaveProfile: @MainActor @escaping (_ name: String, _ about: String) -> Void,
         onUploadPhoto: @MainActor @escaping (_ data: Data, _ mimeType: String) -> Void,
         onLogout: @MainActor @escaping () -> Void,
+        isDeveloperModeEnabledProvider: @MainActor @escaping () -> Bool,
+        onEnableDeveloperMode: @MainActor @escaping () -> Void,
+        onWipeLocalData: @MainActor @escaping () -> Void,
         showLogoutConfirm: Bool = false
     ) {
         self.npub = npub
@@ -47,6 +56,9 @@ struct MyNpubQrSheet: View {
         self.onSaveProfile = onSaveProfile
         self.onUploadPhoto = onUploadPhoto
         self.onLogout = onLogout
+        self.isDeveloperModeEnabledProvider = isDeveloperModeEnabledProvider
+        self.onEnableDeveloperMode = onEnableDeveloperMode
+        self.onWipeLocalData = onWipeLocalData
         self._showLogoutConfirm = State(initialValue: showLogoutConfirm)
     }
 
@@ -222,7 +234,7 @@ struct MyNpubQrSheet: View {
         Section {
             HStack(spacing: 12) {
                 Button {
-                    copyToClipboard(appVersionDisplay, kind: .appVersion)
+                    handleAppVersionTap()
                 } label: {
                     Text(appVersionDisplay)
                         .font(.system(.footnote, design: .monospaced))
@@ -244,7 +256,26 @@ struct MyNpubQrSheet: View {
         } header: {
             Text("App Version")
         } footer: {
-            Text("Tap to copy when sharing troubleshooting details.")
+            if developerModeEnabled {
+                Text("Developer mode enabled.")
+            } else {
+                Text("Use copy when sharing troubleshooting details.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var developerSection: some View {
+        if developerModeEnabled {
+            Section {
+                Button("Wipe All Local Data", role: .destructive) {
+                    showWipeLocalDataConfirm = true
+                }
+            } header: {
+                Text("Developer Mode")
+            } footer: {
+                Text("Deletes all local Pika data on this device and logs out immediately.")
+            }
         }
     }
 
@@ -258,6 +289,7 @@ struct MyNpubQrSheet: View {
             nsecSection(nsec)
         }
         appVersionSection
+        developerSection
         notificationsSection
         logoutSection
     }
@@ -276,6 +308,7 @@ struct MyNpubQrSheet: View {
                 }
             }
             .task {
+                developerModeEnabled = isDeveloperModeEnabledProvider()
                 onRefreshProfile()
                 syncDraftsIfNeeded(force: false)
             }
@@ -300,6 +333,15 @@ struct MyNpubQrSheet: View {
             } message: {
                 Text("You can log back in with your nsec.")
             }
+            .confirmationDialog("Wipe all local data?", isPresented: $showWipeLocalDataConfirm, titleVisibility: .visible) {
+                Button("Wipe All Local Data", role: .destructive) {
+                    onWipeLocalData()
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes local databases, caches, and local state. This cannot be undone.")
+            }
         }
         .overlay(alignment: .bottom) {
             copyToastOverlay
@@ -312,6 +354,26 @@ struct MyNpubQrSheet: View {
             aboutDraft = profile.about
             didSyncDrafts = true
         }
+    }
+
+    @MainActor
+    private func handleAppVersionTap() {
+        if developerModeEnabled {
+            showCopyToast("Developer mode already enabled")
+            return
+        }
+
+        appVersionTapCount += 1
+        let remaining = max(0, 7 - appVersionTapCount)
+        if remaining == 0 {
+            developerModeEnabled = true
+            onEnableDeveloperMode()
+            showCopyToast("Developer mode enabled")
+            return
+        }
+
+        let noun = remaining == 1 ? "tap" : "taps"
+        showCopyToast("\(remaining) \(noun) away from developer mode")
     }
 
     private enum CopyKind {
@@ -453,7 +515,10 @@ struct MyNpubQrSheet: View {
         onRefreshProfile: {},
         onSaveProfile: { _, _ in },
         onUploadPhoto: { _, _ in },
-        onLogout: {}
+        onLogout: {},
+        isDeveloperModeEnabledProvider: { false },
+        onEnableDeveloperMode: {},
+        onWipeLocalData: {}
     )
 }
 
@@ -466,6 +531,9 @@ struct MyNpubQrSheet: View {
         onSaveProfile: { _, _ in },
         onUploadPhoto: { _, _ in },
         onLogout: {},
+        isDeveloperModeEnabledProvider: { false },
+        onEnableDeveloperMode: {},
+        onWipeLocalData: {},
         showLogoutConfirm: true
     )
 }

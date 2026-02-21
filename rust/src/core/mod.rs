@@ -10,6 +10,7 @@ mod session;
 mod storage;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::ffi::OsStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -86,6 +87,7 @@ use interop::{
 
 const DEFAULT_GROUP_NAME: &str = "DM";
 const DEFAULT_GROUP_DESCRIPTION: &str = "";
+const IOS_MIGRATION_SENTINEL: &str = ".migrated_to_app_group";
 
 const TYPING_INDICATOR_KIND: Kind = Kind::Custom(20_067);
 
@@ -737,6 +739,67 @@ impl AppCore {
             self.emit_current_chat();
             self.emit_call_state();
         }
+    }
+
+    fn wipe_local_data(&mut self) {
+        // Drop SQLite handles before deleting files.
+        self.profile_db = None;
+        self.archived_chats.clear();
+        self.push_subscribed_chat_ids.clear();
+        self.push_apns_token = None;
+        self.state.toast = None;
+
+        let root = std::path::Path::new(&self.data_dir);
+        match std::fs::read_dir(root) {
+            Ok(entries) => {
+                for entry in entries {
+                    let Ok(entry) = entry else {
+                        continue;
+                    };
+                    let path = entry.path();
+                    if entry.file_name() == OsStr::new(IOS_MIGRATION_SENTINEL) {
+                        // Keep iOS migration sentinel so next launch won't pull legacy data
+                        // from the old non-app-group container.
+                        continue;
+                    }
+                    let file_type = match entry.file_type() {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(%e, path = %path.display(), "wipe: failed to read file type");
+                            continue;
+                        }
+                    };
+                    let res = if file_type.is_dir() {
+                        std::fs::remove_dir_all(&path)
+                    } else {
+                        std::fs::remove_file(&path)
+                    };
+                    if let Err(e) = res {
+                        tracing::warn!(%e, path = %path.display(), "wipe: failed to delete path");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(%e, path = %root.display(), "wipe: failed to enumerate data dir");
+            }
+        }
+
+        if let Err(e) = std::fs::create_dir_all(root) {
+            tracing::warn!(%e, path = %root.display(), "wipe: failed to recreate data dir");
+        }
+
+        // Wipe removed config files; reset in-memory config for same-process logins.
+        self.config = config::load_app_config(&self.data_dir);
+
+        profile_pics::ensure_dir(&self.data_dir);
+        self.profile_db = match profile_db::open_profile_db(&self.data_dir) {
+            Ok(conn) => Some(conn),
+            Err(e) => {
+                tracing::warn!(%e, "wipe: failed to reopen profile cache db");
+                None
+            }
+        };
+        self.push_device_id = Self::load_or_create_push_device_id(&self.data_dir);
     }
 
     fn set_busy(&mut self, f: impl FnOnce(&mut BusyState)) {
@@ -1672,6 +1735,14 @@ impl AppCore {
                 self.stop_session();
                 self.state.auth = AuthState::LoggedOut;
                 self.emit_auth();
+                self.handle_auth_transition(false);
+            }
+            AppAction::WipeLocalData => {
+                self.clear_push_subscriptions();
+                self.stop_session();
+                self.state.auth = AuthState::LoggedOut;
+                self.emit_auth();
+                self.wipe_local_data();
                 self.handle_auth_transition(false);
             }
             AppAction::ArchiveChat { chat_id } => {

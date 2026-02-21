@@ -11,6 +11,7 @@ pub enum AppAction {
         nsec: String,
     },
     Logout,
+    WipeLocalData,
     RefreshMyProfile,
     SaveMyProfile {
         name: String,
@@ -132,6 +133,7 @@ impl AppAction {
             AppAction::Login { .. } => "Login",
             AppAction::RestoreSession { .. } => "RestoreSession",
             AppAction::Logout => "Logout",
+            AppAction::WipeLocalData => "WipeLocalData",
             AppAction::RefreshMyProfile => "RefreshMyProfile",
             AppAction::SaveMyProfile { .. } => "SaveMyProfile",
             AppAction::UploadMyProfileImage { .. } => "UploadMyProfileImage",

@@ -74,7 +74,10 @@ fun MyProfileSheet(
     var didSyncDrafts by remember { mutableStateOf(false) }
     var showNsec by remember { mutableStateOf(false) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showWipeConfirm by remember { mutableStateOf(false) }
     var isLoadingPhoto by remember { mutableStateOf(false) }
+    var buildNumberTapCount by remember { mutableStateOf(0) }
+    var developerModeEnabled by remember { mutableStateOf(manager.isDeveloperModeEnabled()) }
 
     val nsec = remember { manager.getNsec() }
 
@@ -266,7 +269,26 @@ fun MyProfileSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     TextButton(
-                        onClick = { copyValue(appVersionDisplay, "Version") },
+                        onClick = {
+                            if (developerModeEnabled) {
+                                Toast.makeText(ctx, "Developer mode already enabled", Toast.LENGTH_SHORT).show()
+                            } else {
+                                buildNumberTapCount += 1
+                                val remaining = 7 - buildNumberTapCount
+                                if (remaining <= 0) {
+                                    manager.enableDeveloperMode()
+                                    developerModeEnabled = true
+                                    Toast.makeText(ctx, "Developer mode enabled", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val noun = if (remaining == 1) "tap" else "taps"
+                                    Toast.makeText(
+                                        ctx,
+                                        "$remaining $noun away from developer mode",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
                         modifier = Modifier.weight(1f),
                     ) {
                         Text(
@@ -283,6 +305,35 @@ fun MyProfileSheet(
                             modifier = Modifier.size(18.dp),
                         )
                     }
+                }
+                if (developerModeEnabled) {
+                    Text(
+                        "Developer mode enabled.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            if (developerModeEnabled) {
+                item {
+                    HorizontalDivider()
+                    Text("Developer Mode", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = { showWipeConfirm = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Wipe All Local Data")
+                    }
+                    Text(
+                        "Deletes all local Pika data on this device and logs out immediately.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -325,6 +376,29 @@ fun MyProfileSheet(
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutConfirm = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    if (showWipeConfirm) {
+        AlertDialog(
+            onDismissRequest = { showWipeConfirm = false },
+            title = { Text("Wipe all local data?") },
+            text = { Text("This deletes local databases, caches, and local state. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    manager.wipeLocalDataForDeveloperTools()
+                    developerModeEnabled = manager.isDeveloperModeEnabled()
+                    showWipeConfirm = false
+                    onDismiss()
+                }) {
+                    Text("Wipe All Local Data", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWipeConfirm = false }) {
                     Text("Cancel")
                 }
             },

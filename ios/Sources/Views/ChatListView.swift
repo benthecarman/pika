@@ -11,6 +11,9 @@ struct ChatListView: View {
     let onRefreshProfile: @MainActor () -> Void
     let onSaveProfile: @MainActor (_ name: String, _ about: String) -> Void
     let onUploadProfilePhoto: @MainActor (_ data: Data, _ mimeType: String) -> Void
+    let isDeveloperModeEnabledProvider: @MainActor () -> Bool
+    let onEnableDeveloperMode: @MainActor () -> Void
+    let onWipeLocalData: @MainActor () -> Void
     let nsecProvider: @MainActor () -> String?
     @State private var showMyNpub = false
 
@@ -93,7 +96,10 @@ struct ChatListView: View {
                             onRefreshProfile: onRefreshProfile,
                             onSaveProfile: onSaveProfile,
                             onUploadPhoto: onUploadProfilePhoto,
-                            onLogout: onLogout
+                            onLogout: onLogout,
+                            isDeveloperModeEnabledProvider: isDeveloperModeEnabledProvider,
+                            onEnableDeveloperMode: onEnableDeveloperMode,
+                            onWipeLocalData: onWipeLocalData
                         )
                     }
                 }
@@ -171,6 +177,9 @@ struct ChatListView: View {
             onRefreshProfile: {},
             onSaveProfile: { _, _ in },
             onUploadProfilePhoto: { _, _ in },
+            isDeveloperModeEnabledProvider: { false },
+            onEnableDeveloperMode: {},
+            onWipeLocalData: {},
             nsecProvider: { nil }
         )
     }
@@ -192,6 +201,9 @@ struct ChatListView: View {
             onRefreshProfile: {},
             onSaveProfile: { _, _ in },
             onUploadProfilePhoto: { _, _ in },
+            isDeveloperModeEnabledProvider: { false },
+            onEnableDeveloperMode: {},
+            onWipeLocalData: {},
             nsecProvider: { nil }
         )
     }
@@ -213,6 +225,9 @@ struct ChatListView: View {
             onRefreshProfile: {},
             onSaveProfile: { _, _ in },
             onUploadProfilePhoto: { _, _ in },
+            isDeveloperModeEnabledProvider: { false },
+            onEnableDeveloperMode: {},
+            onWipeLocalData: {},
             nsecProvider: { nil }
         )
     }

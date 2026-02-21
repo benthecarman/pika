@@ -17,9 +17,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
 class AppManager private constructor(context: Context) : AppReconciler {
+    private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val secureStore = SecureNsecStore(context)
-    private val audioFocus = AndroidAudioFocusManager(context.applicationContext)
+    private val audioFocus = AndroidAudioFocusManager(appContext)
+    private val prefs = appContext.getSharedPreferences("pika_prefs", Context.MODE_PRIVATE)
     private val rust: FfiApp
     private var lastRevApplied: ULong = 0UL
     private val listening = AtomicBoolean(false)
@@ -129,6 +131,18 @@ class AppManager private constructor(context: Context) : AppReconciler {
         rust.dispatch(AppAction.Logout)
     }
 
+    fun isDeveloperModeEnabled(): Boolean = prefs.getBoolean(DEVELOPER_MODE_ENABLED_KEY, false)
+
+    fun enableDeveloperMode() {
+        prefs.edit().putBoolean(DEVELOPER_MODE_ENABLED_KEY, true).apply()
+    }
+
+    fun wipeLocalDataForDeveloperTools() {
+        secureStore.clearNsec()
+        prefs.edit().remove(DEVELOPER_MODE_ENABLED_KEY).apply()
+        rust.dispatch(AppAction.WipeLocalData)
+    }
+
     fun getNsec(): String? = secureStore.getNsec()
 
     fun onForeground() {
@@ -174,6 +188,8 @@ class AppManager private constructor(context: Context) : AppReconciler {
         }
 
     companion object {
+        private const val DEVELOPER_MODE_ENABLED_KEY = "developer_mode_enabled"
+
         @Volatile
         private var instance: AppManager? = null
 

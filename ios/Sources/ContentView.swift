@@ -196,6 +196,9 @@ private func screenView(
             onUploadProfilePhoto: { data, mimeType in
                 manager.uploadMyProfileImage(data: data, mimeType: mimeType)
             },
+            isDeveloperModeEnabledProvider: { manager.isDeveloperModeEnabled },
+            onEnableDeveloperMode: { manager.enableDeveloperMode() },
+            onWipeLocalData: { manager.wipeLocalDataForDeveloperTools() },
             nsecProvider: { manager.getNsec() }
         )
     case .newChat:

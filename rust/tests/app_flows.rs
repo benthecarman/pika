@@ -259,6 +259,57 @@ fn logout_resets_state() {
 }
 
 #[test]
+fn wipe_local_data_removes_persistent_files() {
+    let dir = tempdir().unwrap();
+    let data_dir = dir.path().to_path_buf();
+    write_config(&data_dir.to_string_lossy(), true);
+
+    let app = FfiApp::new(data_dir.to_string_lossy().to_string(), String::new());
+    app.dispatch(AppAction::CreateAccount);
+    wait_until("logged in", Duration::from_secs(2), || {
+        matches!(app.state().auth, AuthState::LoggedIn { .. })
+    });
+
+    let pubkey = match app.state().auth {
+        AuthState::LoggedIn { ref pubkey, .. } => pubkey.clone(),
+        _ => panic!("expected logged in"),
+    };
+
+    let mdk_path = data_dir.join("mls").join(&pubkey).join("mdk.sqlite3");
+    wait_until("mdk db created", Duration::from_secs(2), || {
+        mdk_path.exists()
+    });
+
+    let profile_db_path = data_dir.join("profiles.sqlite3");
+    wait_until("profile db created", Duration::from_secs(2), || {
+        profile_db_path.exists()
+    });
+
+    let push_device_id_path = data_dir.join("push_device_id.txt");
+    wait_until("push device id created", Duration::from_secs(2), || {
+        push_device_id_path.exists()
+    });
+    let migration_sentinel = data_dir.join(".migrated_to_app_group");
+    std::fs::write(&migration_sentinel, b"").unwrap();
+    let old_push_device_id = std::fs::read_to_string(&push_device_id_path).unwrap();
+    std::fs::write(data_dir.join("dev_wipe_marker.txt"), b"x").unwrap();
+
+    app.dispatch(AppAction::WipeLocalData);
+    wait_until("logged out", Duration::from_secs(2), || {
+        matches!(app.state().auth, AuthState::LoggedOut)
+    });
+
+    assert!(!mdk_path.exists());
+    assert!(!data_dir.join("dev_wipe_marker.txt").exists());
+    assert!(migration_sentinel.exists());
+    assert!(profile_db_path.exists());
+    assert!(push_device_id_path.exists());
+    let new_push_device_id = std::fs::read_to_string(&push_device_id_path).unwrap();
+    assert!(!new_push_device_id.trim().is_empty());
+    assert_ne!(old_push_device_id.trim(), new_push_device_id.trim());
+}
+
+#[test]
 fn restore_session_recovers_chat_history() {
     let dir = tempdir().unwrap();
     let data_dir = dir.path().to_string_lossy().to_string();

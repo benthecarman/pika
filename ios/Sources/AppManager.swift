@@ -20,17 +20,21 @@ extension KeychainNsecStore: NsecStore {}
 @MainActor
 @Observable
 final class AppManager: AppReconciler {
+    private static let developerModeEnabledKey = "developer_mode_enabled"
+    private static let migrationSentinelName = ".migrated_to_app_group"
     private let core: AppCore
     var state: AppState
     private var lastRevApplied: UInt64
     private let nsecStore: NsecStore
+    private let userDefaults: UserDefaults
     /// True while we're waiting for a stored session to be restored by Rust.
     var isRestoringSession: Bool = false
     private let callAudioSession = CallAudioSessionCoordinator()
 
-    init(core: AppCore, nsecStore: NsecStore) {
+    init(core: AppCore, nsecStore: NsecStore, userDefaults: UserDefaults = .standard) {
         self.core = core
         self.nsecStore = nsecStore
+        self.userDefaults = userDefaults
 
         let initial = core.state()
         self.state = initial
@@ -52,17 +56,8 @@ final class AppManager: AppReconciler {
 
     convenience init() {
         let fm = FileManager.default
-        let appGroup = Bundle.main.infoDictionary?["PikaAppGroup"] as? String ?? "group.org.pikachat.pika"
         let keychainGroup = Bundle.main.infoDictionary?["PikaKeychainGroup"] as? String ?? ""
-        let dataDirUrl: URL
-        if let groupContainer = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup) {
-            dataDirUrl = groupContainer.appendingPathComponent("Library/Application Support")
-        } else {
-            // Fallback for simulator builds where CODE_SIGNING_ALLOWED=NO
-            // means entitlements aren't embedded and the app group container
-            // is unavailable. NSE won't work but the app itself runs fine.
-            dataDirUrl = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        }
+        let dataDirUrl = Self.resolveDataDirURL(fm: fm)
         let dataDir = dataDirUrl.path
         let nsecStore = KeychainNsecStore(keychainGroup: keychainGroup)
 
@@ -162,6 +157,21 @@ final class AppManager: AppReconciler {
         dispatch(.logout)
     }
 
+    var isDeveloperModeEnabled: Bool {
+        userDefaults.bool(forKey: Self.developerModeEnabledKey)
+    }
+
+    func enableDeveloperMode() {
+        userDefaults.set(true, forKey: Self.developerModeEnabledKey)
+    }
+
+    func wipeLocalDataForDeveloperTools() {
+        nsecStore.clearNsec()
+        userDefaults.removeObject(forKey: Self.developerModeEnabledKey)
+        ensureMigrationSentinelExists()
+        dispatch(.wipeLocalData)
+    }
+
     func onForeground() {
         // Foreground is a lifecycle action; Rust owns state changes and side effects.
         dispatch(.foregrounded)
@@ -192,7 +202,7 @@ final class AppManager: AppReconciler {
     /// Moves existing data from the old app-private Application Support directory
     /// to the shared App Group container. Runs once; a sentinel file prevents re-runs.
     private static func migrateDataDirIfNeeded(fm: FileManager, newDir: URL) {
-        let sentinel = newDir.appendingPathComponent(".migrated_to_app_group")
+        let sentinel = newDir.appendingPathComponent(Self.migrationSentinelName)
         if fm.fileExists(atPath: sentinel.path) { return }
 
         let oldDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -216,6 +226,27 @@ final class AppManager: AppReconciler {
         }
 
         fm.createFile(atPath: sentinel.path, contents: nil)
+    }
+
+    private static func resolveDataDirURL(fm: FileManager) -> URL {
+        let appGroup = Bundle.main.infoDictionary?["PikaAppGroup"] as? String ?? "group.org.pikachat.pika"
+        if let groupContainer = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup) {
+            return groupContainer.appendingPathComponent("Library/Application Support")
+        }
+        // Fallback for simulator builds where CODE_SIGNING_ALLOWED=NO
+        // means entitlements aren't embedded and the app group container
+        // is unavailable. NSE won't work but the app itself runs fine.
+        return fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    }
+
+    private func ensureMigrationSentinelExists() {
+        let fm = FileManager.default
+        let dataDirUrl = Self.resolveDataDirURL(fm: fm)
+        try? fm.createDirectory(at: dataDirUrl, withIntermediateDirectories: true)
+        let sentinel = dataDirUrl.appendingPathComponent(Self.migrationSentinelName)
+        if !fm.fileExists(atPath: sentinel.path) {
+            fm.createFile(atPath: sentinel.path, contents: nil)
+        }
     }
 }
 
