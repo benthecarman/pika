@@ -706,9 +706,7 @@ impl DesktopApp {
         } else if route.selected_chat_id.is_some() {
             if let Some(chat) = &self.state.current_chat {
                 let replying_to = self.reply_to_message_id.as_ref().and_then(|reply_id| {
-                    chat.messages
-                        .iter()
-                        .find(|message| message.id == *reply_id)
+                    chat.messages.iter().find(|message| message.id == *reply_id)
                 });
                 views::conversation::conversation_view(
                     chat,

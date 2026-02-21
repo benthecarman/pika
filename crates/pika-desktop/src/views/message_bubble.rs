@@ -107,13 +107,17 @@ pub fn message_bubble<'a>(
         if let Some(preview) = make_reply_preview() {
             bubble_content = bubble_content.push(preview);
         }
-        bubble_content = bubble_content.push(text(&msg.display_content).size(14).color(Color::WHITE));
         bubble_content =
-            bubble_content.push(text(time_text).size(10).color(Color::WHITE.scale_alpha(0.6)));
+            bubble_content.push(text(&msg.display_content).size(14).color(Color::WHITE));
+        bubble_content = bubble_content.push(
+            text(time_text)
+                .size(10)
+                .color(Color::WHITE.scale_alpha(0.6)),
+        );
         let bubble = container(bubble_content)
-        .padding([8, 12])
-        .max_width(500)
-        .style(theme::bubble_sent_style);
+            .padding([8, 12])
+            .max_width(500)
+            .style(theme::bubble_sent_style);
 
         let mut bubble_row = row![Space::new().width(Fill)]
             .spacing(6)
