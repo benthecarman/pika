@@ -5,6 +5,24 @@ End-to-end encrypted messaging for iOS and Android, built on [MLS](https://messa
 > [!WARNING]
 > Alpha software. This project was largely vibe-coded and likely contains privacy and security flaws. Do not use it for sensitive or production workloads.
 
+## Features
+
+| Feature | iOS | Android | Desktop |
+|---|:---:|:---:|:---:|
+| 1:1 encrypted messaging | ✅ | ✅ | ✅ |
+| Group chats (MLS) | ✅ | ✅ | ✅ |
+| Voice calls (1:1) | ✅ | ✅ | ✅ |
+| Push notifications | ✅ | | |
+| Emoji reactions | ✅ | | |
+| Typing indicators | ✅ | | ✅ |
+| @mention autocomplete | ✅ | | |
+| Markdown rendering | ✅ | ✅ | |
+| Polls | ✅ | ✅ | |
+| Interactive widgets (HTML) | ✅ | | |
+| QR code scan / display | ✅ | ✅ | |
+| Profile photo upload | ✅ | ✅ | |
+| Follow / unfollow contacts | ✅ | ✅ | |
+
 ## How it works
 
 Pika uses the [Marmot protocol](https://github.com/marmot-protocol/mdk) to layer MLS group encryption on top of Nostr relays. Messages are encrypted client-side using MLS, then published as Nostr events. Nostr relays handle transport and delivery without ever seeing plaintext.
