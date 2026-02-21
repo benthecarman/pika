@@ -404,15 +404,15 @@ impl NetworkRelayState {
         let track = Track::new(&track_addr.track_name).produce();
 
         // Reuse existing broadcast for this path, or create a new one.
-        let broadcast =
-            self.broadcast_producers
-                .entry(track_addr.broadcast_path.clone())
-                .or_insert_with(|| {
-                    let bp = BroadcastProducer::default();
-                    self.origin
-                        .publish_broadcast(&track_addr.broadcast_path, bp.consume());
-                    bp
-                });
+        let broadcast = self
+            .broadcast_producers
+            .entry(track_addr.broadcast_path.clone())
+            .or_insert_with(|| {
+                let bp = BroadcastProducer::default();
+                self.origin
+                    .publish_broadcast(&track_addr.broadcast_path, bp.consume());
+                bp
+            });
 
         broadcast.insert_track(track.clone());
 

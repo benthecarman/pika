@@ -899,9 +899,7 @@ impl AppCore {
         }
         if !matches!(
             call.status,
-            CallStatus::Offering
-                | CallStatus::Connecting
-                | CallStatus::Active
+            CallStatus::Offering | CallStatus::Connecting | CallStatus::Active
         ) {
             return;
         }

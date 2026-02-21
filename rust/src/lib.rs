@@ -177,9 +177,9 @@ impl FfiApp {
     }
 
     pub fn send_video_frame(&self, payload: Vec<u8>) {
-        let _ = self
-            .core_tx
-            .send(CoreMsg::Internal(Box::new(InternalEvent::VideoFrameFromPlatform { payload })));
+        let _ = self.core_tx.send(CoreMsg::Internal(Box::new(
+            InternalEvent::VideoFrameFromPlatform { payload },
+        )));
     }
 
     pub fn set_external_signer_bridge(&self, bridge: Box<dyn ExternalSignerBridgeTrait>) {

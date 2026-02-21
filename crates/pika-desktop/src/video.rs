@@ -23,10 +23,7 @@ pub struct DecodedFrame {
 }
 
 impl DesktopVideoReceiver {
-    fn new(
-        latest_frame: Arc<Mutex<Option<DecodedFrame>>>,
-        generation: Arc<AtomicU64>,
-    ) -> Self {
+    fn new(latest_frame: Arc<Mutex<Option<DecodedFrame>>>, generation: Arc<AtomicU64>) -> Self {
         Self {
             latest_frame,
             generation,
@@ -71,7 +68,6 @@ fn decode_h264_to_rgba(annexb: &[u8]) -> Option<DecodedFrame> {
     })
 }
 
-
 /// Captures from the system camera, encodes to H.264, and pushes to Rust core.
 struct CaptureThread {
     stop: Arc<AtomicBool>,
@@ -106,9 +102,7 @@ impl CaptureThread {
         camera_error: Arc<Mutex<Option<String>>>,
     ) {
         use nokhwa::pixel_format::RgbFormat;
-        use nokhwa::utils::{
-            CameraIndex, RequestedFormat, RequestedFormatType, Resolution,
-        };
+        use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType, Resolution};
         use nokhwa::Camera;
         use openh264::formats::YUVBuffer;
 
@@ -119,12 +113,9 @@ impl CaptureThread {
         };
 
         // Request target resolution — AbsoluteHighestResolution may select 4K which is too slow
-        let format = RequestedFormat::new::<RgbFormat>(
-            RequestedFormatType::HighestResolution(Resolution::new(
-                video_params::WIDTH,
-                video_params::HEIGHT,
-            )),
-        );
+        let format = RequestedFormat::new::<RgbFormat>(RequestedFormatType::HighestResolution(
+            Resolution::new(video_params::WIDTH, video_params::HEIGHT),
+        ));
         let mut camera = match Camera::new(CameraIndex::Index(0), format) {
             Ok(c) => c,
             Err(e) => {
@@ -274,8 +265,10 @@ impl DesktopVideoPipeline {
             DesktopVideoReceiver::new(self.latest_frame.clone(), self.generation.clone());
         manager.set_video_frame_receiver(Box::new(receiver));
 
-        self.capture_thread =
-            Some(CaptureThread::start(manager.clone(), self.camera_error.clone()));
+        self.capture_thread = Some(CaptureThread::start(
+            manager.clone(),
+            self.camera_error.clone(),
+        ));
     }
 
     pub fn stop(&mut self) {
@@ -304,14 +297,18 @@ impl DesktopVideoPipeline {
         if self.capture_thread.is_some() {
             return;
         }
-        self.capture_thread =
-            Some(CaptureThread::start(manager.clone(), self.camera_error.clone()));
+        self.capture_thread = Some(CaptureThread::start(
+            manager.clone(),
+            self.camera_error.clone(),
+        ));
     }
 
     /// Whether at least one video frame has been decoded and is not stale.
     pub fn has_video(&self) -> bool {
         self.generation.load(Ordering::Relaxed) > 0
-            && self.last_frame_instant.is_some_and(|t| t.elapsed().as_secs_f64() < 1.0)
+            && self
+                .last_frame_instant
+                .is_some_and(|t| t.elapsed().as_secs_f64() < 1.0)
     }
 
     /// Call periodically (e.g. on each video tick) to update staleness tracking

@@ -154,10 +154,7 @@ impl MediaTransport {
 }
 
 impl CallRuntime {
-    pub(super) fn set_video_frame_receiver(
-        &mut self,
-        receiver: SharedVideoFrameReceiver,
-    ) {
+    pub(super) fn set_video_frame_receiver(&mut self, receiver: SharedVideoFrameReceiver) {
         self.video_frame_receiver = Some(receiver);
     }
 
@@ -269,7 +266,9 @@ impl CallRuntime {
                                 match video_transport.publish(&video_publish_track, frame) {
                                     Ok(_) => {
                                         seq = seq.saturating_add(1);
-                                        video_stats_for_thread.tx_count.fetch_add(1, Ordering::Relaxed);
+                                        video_stats_for_thread
+                                            .tx_count
+                                            .fetch_add(1, Ordering::Relaxed);
                                     }
                                     Err(e) => {
                                         if !video_publish_error_logged {
@@ -285,29 +284,31 @@ impl CallRuntime {
                     // RX: receive remote video frames
                     for _ in 0..4 {
                         match video_rx.try_recv() {
-                            Ok(inbound) => {
-                                match decrypt_frame(&inbound.payload, &video_rx_keys) {
-                                    Ok(decrypted) => {
-                                        if !replay_window.allow(decrypted.info.group_seq) {
-                                            continue;
-                                        }
-                                        video_stats_for_thread.rx_count.fetch_add(1, Ordering::Relaxed);
-                                        if let Some(ref receiver_lock) = video_receiver {
-                                            if let Ok(guard) = receiver_lock.read() {
-                                                if let Some(ref receiver) = *guard {
-                                                    receiver.on_video_frame(
-                                                        call_id_for_video.clone(),
-                                                        decrypted.payload,
-                                                    );
-                                                }
+                            Ok(inbound) => match decrypt_frame(&inbound.payload, &video_rx_keys) {
+                                Ok(decrypted) => {
+                                    if !replay_window.allow(decrypted.info.group_seq) {
+                                        continue;
+                                    }
+                                    video_stats_for_thread
+                                        .rx_count
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    if let Some(ref receiver_lock) = video_receiver {
+                                        if let Ok(guard) = receiver_lock.read() {
+                                            if let Some(ref receiver) = *guard {
+                                                receiver.on_video_frame(
+                                                    call_id_for_video.clone(),
+                                                    decrypted.payload,
+                                                );
                                             }
                                         }
                                     }
-                                    Err(_) => {
-                                        video_stats_for_thread.rx_decrypt_fail.fetch_add(1, Ordering::Relaxed);
-                                    }
                                 }
-                            }
+                                Err(_) => {
+                                    video_stats_for_thread
+                                        .rx_decrypt_fail
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                            },
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => break,
                         }
@@ -496,7 +497,9 @@ impl CallRuntime {
                             last_rtt_ms: None,
                             video_tx: video_stats_for_audio.tx_count.load(Ordering::Relaxed),
                             video_rx: video_stats_for_audio.rx_count.load(Ordering::Relaxed),
-                            video_rx_decrypt_fail: video_stats_for_audio.rx_decrypt_fail.load(Ordering::Relaxed),
+                            video_rx_decrypt_fail: video_stats_for_audio
+                                .rx_decrypt_fail
+                                .load(Ordering::Relaxed),
                         },
                     )));
                 }

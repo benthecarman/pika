@@ -209,8 +209,7 @@ impl DesktopApp {
             // iced picks up the latest frame for display.
             if is_video_call && is_active_call {
                 subs.push(
-                    iced::time::every(Duration::from_millis(33))
-                        .map(|_| Message::VideoFrameTick),
+                    iced::time::every(Duration::from_millis(33)).map(|_| Message::VideoFrameTick),
                 );
             }
             Subscription::batch(subs)
@@ -660,7 +659,10 @@ impl DesktopApp {
                     .and_then(|c| c.members.first())
                     .and_then(|m| m.name.as_deref())
                     .unwrap_or("Unknown");
-                main_column = main_column.push(views::call_banner::incoming_call_banner(peer_name, call.is_video_call));
+                main_column = main_column.push(views::call_banner::incoming_call_banner(
+                    peer_name,
+                    call.is_video_call,
+                ));
             }
         }
 

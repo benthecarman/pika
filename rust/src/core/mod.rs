@@ -459,7 +459,9 @@ impl AppCore {
 
     pub fn set_video_frame_receiver(
         &mut self,
-        receiver: std::sync::Arc<std::sync::RwLock<Option<std::sync::Arc<dyn crate::VideoFrameReceiver>>>>,
+        receiver: std::sync::Arc<
+            std::sync::RwLock<Option<std::sync::Arc<dyn crate::VideoFrameReceiver>>>,
+        >,
     ) {
         self.call_runtime.set_video_frame_receiver(receiver);
     }

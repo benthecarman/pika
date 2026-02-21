@@ -98,8 +98,11 @@ impl CallState {
         is_video_call: bool,
         debug: Option<CallDebugStats>,
     ) -> Self {
-        let should_enable_proximity_lock =
-            if is_video_call { false } else { status.should_enable_proximity_lock() };
+        let should_enable_proximity_lock = if is_video_call {
+            false
+        } else {
+            status.should_enable_proximity_lock()
+        };
         Self {
             call_id,
             chat_id,
@@ -119,8 +122,11 @@ impl CallState {
     pub fn set_status(&mut self, status: CallStatus) {
         self.is_live = status.is_live();
         self.should_auto_present_call_screen = status.should_auto_present_call_screen();
-        self.should_enable_proximity_lock =
-            if self.is_video_call { false } else { status.should_enable_proximity_lock() };
+        self.should_enable_proximity_lock = if self.is_video_call {
+            false
+        } else {
+            status.should_enable_proximity_lock()
+        };
         self.status = status;
     }
 }

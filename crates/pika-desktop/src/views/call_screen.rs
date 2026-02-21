@@ -25,7 +25,14 @@ pub fn call_screen_view<'a>(
         let has_video = video_pipeline.has_video();
         let camera_err = video_pipeline.camera_error();
         let program = video_pipeline.shader_program();
-        return build_video_call_layout(call, peer_name, status_text, has_video, program, camera_err);
+        return build_video_call_layout(
+            call,
+            peer_name,
+            status_text,
+            has_video,
+            program,
+            camera_err,
+        );
     }
 
     // Audio call (or video call without a frame yet): standard layout
@@ -196,10 +203,7 @@ fn build_video_call_layout<'a>(
     );
 
     // Stack: video behind, controls on top
-    stack![video_bg, overlay]
-        .width(Fill)
-        .height(Fill)
-        .into()
+    stack![video_bg, overlay].width(Fill).height(Fill).into()
 }
 
 fn dismiss_button_row<'a>() -> Element<'a, Message, Theme> {
@@ -294,13 +298,14 @@ fn build_controls<'a>(call: &'a CallState) -> Element<'a, Message, Theme> {
             } else {
                 theme::call_control_button_style
             };
-            let mut controls = row![
-                button(text(mute_label).size(14).color(iced::Color::WHITE).center())
-                    .on_press(Message::ToggleMute)
-                    .padding([12, 24])
-                    .style(mute_style),
-            ]
-            .align_y(Alignment::Center);
+            let mut controls =
+                row![
+                    button(text(mute_label).size(14).color(iced::Color::WHITE).center())
+                        .on_press(Message::ToggleMute)
+                        .padding([12, 24])
+                        .style(mute_style),
+                ]
+                .align_y(Alignment::Center);
 
             if call.is_video_call {
                 let cam_label = if call.is_camera_enabled {
@@ -314,29 +319,20 @@ fn build_controls<'a>(call: &'a CallState) -> Element<'a, Message, Theme> {
                     } else {
                         theme::call_control_button_style
                     };
-                controls = controls
-                    .push(Space::new().width(24))
-                    .push(
-                        button(
-                            text(cam_label)
-                                .size(14)
-                                .color(iced::Color::WHITE)
-                                .center(),
-                        )
+                controls = controls.push(Space::new().width(24)).push(
+                    button(text(cam_label).size(14).color(iced::Color::WHITE).center())
                         .on_press(Message::ToggleCamera)
                         .padding([12, 24])
                         .style(cam_style),
-                    );
+                );
             }
 
-            controls = controls
-                .push(Space::new().width(48))
-                .push(
-                    button(text("End").size(14).color(iced::Color::WHITE).center())
-                        .on_press(Message::EndCall)
-                        .padding([12, 24])
-                        .style(theme::danger_button_style),
-                );
+            controls = controls.push(Space::new().width(48)).push(
+                button(text("End").size(14).color(iced::Color::WHITE).center())
+                    .on_press(Message::EndCall)
+                    .padding([12, 24])
+                    .style(theme::danger_button_style),
+            );
             controls.into()
         }
         CallStatus::Ended { reason } => {
