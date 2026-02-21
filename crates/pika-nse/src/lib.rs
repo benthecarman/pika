@@ -70,11 +70,25 @@ pub fn decrypt_push_notification(
     let chat_id = hex::encode(group.nostr_group_id);
 
     match msg.kind {
-        Kind::ChatMessage => {
-            // For chat messages, if decryption failed, suppress the notification.
-            if msg.content.is_empty() {
-                return Some(PushNotificationResult::Suppress);
-            }
+        Kind::ChatMessage | Kind::Reaction => {
+            let content = match msg.kind {
+                Kind::ChatMessage => {
+                    // For chat messages, if decryption failed, suppress the notification.
+                    if msg.content.is_empty() {
+                        return Some(PushNotificationResult::Suppress);
+                    }
+                    msg.content
+                }
+                Kind::Reaction => {
+                    let emoji = if msg.content.is_empty() || msg.content == "+" {
+                        "\u{2764}\u{FE0F}".to_string()
+                    } else {
+                        msg.content
+                    };
+                    format!("Reacted {emoji}")
+                }
+                _ => unreachable!(),
+            };
 
             let all_groups = mdk.get_groups().ok()?;
             let group_info = all_groups
@@ -102,7 +116,7 @@ pub fn decrypt_push_notification(
                     sender_pubkey: sender_hex,
                     sender_name,
                     sender_picture_url,
-                    content: msg.content,
+                    content,
                     is_group,
                     group_name,
                 },
