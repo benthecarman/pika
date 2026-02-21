@@ -69,7 +69,7 @@ android-device-start *ARGS:
   just rmp devices start android {{ARGS}}
 
 # Boot Android target and open app with agent-device.
-android-agent-open APP="com.justinmoon.pika.dev" *ARGS:
+android-agent-open APP="com.justinmoon.pika.dev" *ARGS="":
   just android-device-start {{ARGS}}
   ./tools/agent-device --platform android open {{APP}}
 
