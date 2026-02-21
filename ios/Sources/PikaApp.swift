@@ -2,6 +2,10 @@ import SwiftUI
 import UserNotifications
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    /// The chat currently on screen. Set from ContentView so ``willPresent``
+    /// can suppress foreground notifications for the active conversation.
+    static var activeChatId: String?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
@@ -35,10 +39,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ) {
         // Only show notifications the NSE successfully decrypted (marked with chat_id).
         // Unprocessed notifications (e.g. self-messages while app is in foreground) are suppressed.
-        if notification.request.content.userInfo["chat_id"] != nil {
-            completionHandler([.banner, .sound, .badge])
-        } else {
+        guard let chatId = notification.request.content.userInfo["chat_id"] as? String else {
             completionHandler([])
+            return
+        }
+        // Suppress notifications for the conversation currently on screen.
+        if chatId == Self.activeChatId {
+            completionHandler([])
+        } else {
+            completionHandler([.banner, .sound, .badge])
         }
     }
 }

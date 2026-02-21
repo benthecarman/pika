@@ -91,9 +91,16 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: manager.state.currentChat?.chatId) { _, newChatId in
+            AppDelegate.activeChatId = newChatId
+        }
         .onChange(of: manager.state.activeCall) { old, new in
             guard let new else {
                 isCallScreenPresented = false
+                // Clear call notifications when the call ends/is rejected.
+                if let chatId = old?.chatId {
+                    clearDeliveredNotifications(forChatId: chatId)
+                }
                 return
             }
 
