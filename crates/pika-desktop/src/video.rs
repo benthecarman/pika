@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use pika_core::VideoFrameReceiver;
+use pika_media::tracks::video_params;
 
 use crate::app_manager::AppManager;
 use crate::video_shader::VideoShaderProgram;
@@ -74,6 +75,7 @@ fn decode_h264_to_rgba(annexb: &[u8]) -> Option<DecodedFrame> {
 /// Captures from the system camera, encodes to H.264, and pushes to Rust core.
 struct CaptureThread {
     stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl CaptureThread {
@@ -81,15 +83,21 @@ impl CaptureThread {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = stop.clone();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             Self::capture_loop(manager, stop_flag, camera_error);
         });
 
-        Self { stop }
+        Self {
+            stop,
+            handle: Some(handle),
+        }
     }
 
-    fn stop(&self) {
+    fn stop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
 
     fn capture_loop(
@@ -110,9 +118,12 @@ impl CaptureThread {
             }
         };
 
-        // Request 720p — AbsoluteHighestResolution may select 4K which is too slow
+        // Request target resolution — AbsoluteHighestResolution may select 4K which is too slow
         let format = RequestedFormat::new::<RgbFormat>(
-            RequestedFormatType::HighestResolution(Resolution::new(1280, 720)),
+            RequestedFormatType::HighestResolution(Resolution::new(
+                video_params::WIDTH,
+                video_params::HEIGHT,
+            )),
         );
         let mut camera = match Camera::new(CameraIndex::Index(0), format) {
             Ok(c) => c,
@@ -160,8 +171,8 @@ impl CaptureThread {
             let yuv = rgb_to_yuv420(rgb_bytes, width, height);
             let yuv_buf = YUVBuffer::from_vec(yuv, width, height);
 
-            // Force IDR every 2 seconds (~60 frames) so late joiners get SPS/PPS
-            if frame_count % 60 == 0 {
+            // Force IDR periodically so late joiners get SPS/PPS
+            if frame_count.is_multiple_of(video_params::KEYFRAME_INTERVAL as u64) {
                 encoder.force_intra_frame();
             }
             frame_count += 1;
@@ -225,6 +236,10 @@ pub struct DesktopVideoPipeline {
     camera_error: Arc<Mutex<Option<String>>>,
     capture_thread: Option<CaptureThread>,
     is_active: bool,
+    /// Track the last generation we saw a new frame, for staleness detection.
+    last_seen_generation: u64,
+    /// Monotonic instant of the last new remote frame.
+    last_frame_instant: Option<std::time::Instant>,
 }
 
 impl DesktopVideoPipeline {
@@ -235,6 +250,8 @@ impl DesktopVideoPipeline {
             camera_error: Arc::new(Mutex::new(None)),
             capture_thread: None,
             is_active: false,
+            last_seen_generation: 0,
+            last_frame_instant: None,
         }
     }
 
@@ -267,7 +284,7 @@ impl DesktopVideoPipeline {
         }
         self.is_active = false;
 
-        if let Some(ct) = self.capture_thread.take() {
+        if let Some(mut ct) = self.capture_thread.take() {
             ct.stop();
         }
         if let Ok(mut slot) = self.latest_frame.lock() {
@@ -275,9 +292,44 @@ impl DesktopVideoPipeline {
         }
     }
 
-    /// Whether at least one video frame has been decoded.
+    /// Stop only the camera capture thread (when camera is toggled off) but keep
+    /// the decoder/receiver active so remote frames still display.
+    fn stop_capture(&mut self) {
+        if let Some(mut ct) = self.capture_thread.take() {
+            ct.stop();
+        }
+    }
+
+    fn start_capture(&mut self, manager: &AppManager) {
+        if self.capture_thread.is_some() {
+            return;
+        }
+        self.capture_thread =
+            Some(CaptureThread::start(manager.clone(), self.camera_error.clone()));
+    }
+
+    /// Whether at least one video frame has been decoded and is not stale.
     pub fn has_video(&self) -> bool {
         self.generation.load(Ordering::Relaxed) > 0
+            && self.last_frame_instant.is_some_and(|t| t.elapsed().as_secs_f64() < 1.0)
+    }
+
+    /// Call periodically (e.g. on each video tick) to update staleness tracking
+    /// and clear the decoded frame if no new frames arrive for 1 second.
+    pub fn check_staleness(&mut self) {
+        let gen = self.generation.load(Ordering::Relaxed);
+        if gen != self.last_seen_generation {
+            self.last_seen_generation = gen;
+            self.last_frame_instant = Some(std::time::Instant::now());
+        } else if let Some(t) = self.last_frame_instant {
+            if t.elapsed().as_secs_f64() > 1.0 {
+                // Remote stopped sending — clear the frame
+                if let Ok(mut slot) = self.latest_frame.lock() {
+                    *slot = None;
+                }
+                self.last_frame_instant = None;
+            }
+        }
     }
 
     /// Create a shader program for rendering the video via a persistent GPU texture.
@@ -290,6 +342,12 @@ impl DesktopVideoPipeline {
             Some(call) if call.is_video_call && call.is_live => {
                 if !self.is_active {
                     self.start(manager);
+                }
+                // Pause/resume camera capture based on camera enabled state
+                if call.is_camera_enabled {
+                    self.start_capture(manager);
+                } else {
+                    self.stop_capture();
                 }
             }
             _ => {

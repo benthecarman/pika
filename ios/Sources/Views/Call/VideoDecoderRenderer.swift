@@ -1,11 +1,13 @@
 import CoreMedia
 import CoreVideo
 import Foundation
+import os
 import VideoToolbox
 
 /// Receives encrypted H.264 NALUs from Rust core, decodes them, and publishes
 /// decoded pixel buffers for display.
 final class VideoDecoderRenderer: VideoFrameReceiver {
+    private static let log = Logger(subsystem: "chat.pika", category: "VideoDecoderRenderer")
     private var decompressionSession: VTDecompressionSession?
     private var formatDescription: CMVideoFormatDescription?
     private var lastSps: Data?
@@ -133,22 +135,17 @@ final class VideoDecoderRenderer: VideoFrameReceiver {
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA
         ]
 
-        var callback = VTDecompressionOutputCallbackRecord(
-            decompressionOutputCallback: nil,
-            decompressionOutputRefCon: nil
-        )
-
         var session: VTDecompressionSession?
         let status = VTDecompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             formatDescription: formatDescription,
             decoderSpecification: nil,
             imageBufferAttributes: attrs as CFDictionary,
-            outputCallback: &callback,
+            outputCallback: nil,
             decompressionSessionOut: &session
         )
         guard status == noErr else {
-            NSLog("[VideoDecoderRenderer] VTDecompressionSessionCreate failed: \(status)")
+            Self.log.error("VTDecompressionSessionCreate failed: \(status)")
             return
         }
         decompressionSession = session

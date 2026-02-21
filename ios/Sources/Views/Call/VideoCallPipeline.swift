@@ -27,6 +27,8 @@ final class VideoCallPipeline {
     }
 
     /// Start the video pipeline for an active video call.
+    /// Note: this starts the decoder/receiver only. Camera capture is managed
+    /// by `syncCapture(enabled:)` which is driven by Rust-owned `is_camera_enabled` state.
     func start() {
         guard !isActive, let core else { return }
         isActive = true
@@ -42,11 +44,6 @@ final class VideoCallPipeline {
 
         // Register decoder as the video frame receiver with Rust core
         core.setVideoFrameReceiver(receiver: dec)
-
-        // Capture: camera → H.264 encode → Rust core
-        let cap = VideoCaptureManager(core: core)
-        cap.startCapture()
-        captureManager = cap
 
         // Start staleness timer: clear remote frame if no new frames for 1s
         stalenessTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -79,12 +76,16 @@ final class VideoCallPipeline {
             stop()
             return
         }
-        // Start the pipeline if not already running
+        // Start the decoder/receiver pipeline if not already running
         if !isActive {
             start()
         }
-        // Pause/resume capture based on camera enabled state
-        if call.isCameraEnabled {
+        // Pause/resume camera capture based on Rust-owned camera enabled state
+        syncCapture(enabled: call.isCameraEnabled)
+    }
+
+    private func syncCapture(enabled: Bool) {
+        if enabled {
             if captureManager == nil, let core {
                 let cap = VideoCaptureManager(core: core)
                 cap.startCapture()

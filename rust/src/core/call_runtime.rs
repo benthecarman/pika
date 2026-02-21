@@ -241,7 +241,7 @@ impl CallRuntime {
                 let mut tx_counter = 0u32;
                 let mut next_tick = Instant::now();
                 let mut replay_window = ReplayWindow::default();
-
+                let mut video_publish_error_logged = false;
 
                 while !stop_for_video_thread.load(Ordering::Relaxed) {
                     // TX: send platform video frames
@@ -272,9 +272,8 @@ impl CallRuntime {
                                         video_stats_for_thread.tx_count.fetch_add(1, Ordering::Relaxed);
                                     }
                                     Err(e) => {
-                                        static LOGGED: std::sync::atomic::AtomicBool =
-                                            std::sync::atomic::AtomicBool::new(false);
-                                        if !LOGGED.swap(true, Ordering::Relaxed) {
+                                        if !video_publish_error_logged {
+                                            video_publish_error_logged = true;
                                             tracing::error!("video publish failed: {e}");
                                         }
                                     }
@@ -547,12 +546,7 @@ impl CallRuntime {
             if let Some(ref tx) = worker.video_frame_tx {
                 let _ = tx.send(payload);
             } else {
-                // Log once if video_frame_tx is None (video worker not started)
-                static LOGGED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if !LOGGED.swap(true, Ordering::Relaxed) {
-                    tracing::warn!(call_id, "send_video_frame: no video_frame_tx channel");
-                }
+                tracing::warn!(call_id, "send_video_frame: no video_frame_tx channel");
             }
         }
     }

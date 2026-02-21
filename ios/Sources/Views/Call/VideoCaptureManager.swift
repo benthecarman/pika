@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import VideoToolbox
 
 /// Manages camera capture and H.264 encoding for video calls.
@@ -9,15 +10,18 @@ final class VideoCaptureManager: NSObject {
     let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
     private let processingQueue = DispatchQueue(label: "pika.video.capture", qos: .userInteractive)
-    private nonisolated(unsafe) var compressionSession: VTCompressionSession?
     private var currentCameraPosition: AVCaptureDevice.Position = .front
-    private nonisolated(unsafe) var core: (any AppCore)?
-
-    private var frameCount: Int64 = 0
     private var isRunning = false
 
+    /// Lock-protected state accessed from both @MainActor and processingQueue.
+    private let sharedLock = NSLock()
+    private var _compressionSession: VTCompressionSession?
+    private var _core: (any AppCore)?
+
+    private static let log = Logger(subsystem: "chat.pika", category: "VideoCaptureManager")
+
     init(core: (any AppCore)?) {
-        self.core = core
+        self._core = core
         super.init()
     }
 
@@ -41,11 +45,14 @@ final class VideoCaptureManager: NSObject {
             self?.captureSession.stopRunning()
         }
 
-        if let session = compressionSession {
+        sharedLock.lock()
+        let session = _compressionSession
+        _compressionSession = nil
+        sharedLock.unlock()
+
+        if let session {
             VTCompressionSessionInvalidate(session)
-            compressionSession = nil
         }
-        frameCount = 0
     }
 
     func switchCamera() {
@@ -106,7 +113,7 @@ final class VideoCaptureManager: NSObject {
             device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
             device.unlockForConfiguration()
         } catch {
-            NSLog("[VideoCaptureManager] failed to set frame rate: \(error)")
+            Self.log.error("failed to set frame rate: \(error.localizedDescription)")
         }
 
         // Video output
@@ -134,8 +141,13 @@ final class VideoCaptureManager: NSObject {
     }
 
     private func setupEncoder() {
-        if let session = compressionSession {
-            VTCompressionSessionInvalidate(session)
+        sharedLock.lock()
+        let oldSession = _compressionSession
+        _compressionSession = nil
+        sharedLock.unlock()
+
+        if let oldSession {
+            VTCompressionSessionInvalidate(oldSession)
         }
 
         // Capture connection rotates pixels to portrait (videoOrientation = .portrait),
@@ -157,10 +169,9 @@ final class VideoCaptureManager: NSObject {
             compressionSessionOut: &session
         )
         guard status == noErr, let session else {
-            NSLog("[VideoCaptureManager] VTCompressionSessionCreate failed: \(status)")
+            Self.log.error("VTCompressionSessionCreate failed: \(status)")
             return
         }
-        compressionSession = session
 
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel,
@@ -172,6 +183,10 @@ final class VideoCaptureManager: NSObject {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
 
         VTCompressionSessionPrepareToEncodeFrames(session)
+
+        sharedLock.lock()
+        _compressionSession = session
+        sharedLock.unlock()
     }
 
     private func camera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
@@ -179,7 +194,11 @@ final class VideoCaptureManager: NSObject {
     }
 
     private nonisolated func encodeFrame(_ pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
-        guard let session = compressionSession else { return }
+        sharedLock.lock()
+        let session = _compressionSession
+        sharedLock.unlock()
+
+        guard let session else { return }
 
         var flags: VTEncodeInfoFlags = []
         let status = VTCompressionSessionEncodeFrame(
@@ -195,13 +214,18 @@ final class VideoCaptureManager: NSObject {
         }
 
         if status != noErr {
-            NSLog("[VideoCaptureManager] encode failed: \(status)")
+            Self.log.error("encode failed: \(status)")
         }
     }
 
     private nonisolated func handleEncodedFrame(_ sampleBuffer: CMSampleBuffer) {
         // Extract Annex B NALUs from the CMSampleBuffer
         guard let annexB = sampleBufferToAnnexB(sampleBuffer) else { return }
+
+        sharedLock.lock()
+        let core = _core
+        sharedLock.unlock()
+
         core?.sendVideoFrame(payload: annexB)
     }
 

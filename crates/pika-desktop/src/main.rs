@@ -204,12 +204,12 @@ impl DesktopApp {
                     iced::time::every(Duration::from_secs(1)).map(|_| Message::CallTimerTick),
                 );
             }
-            // Poll for new video frames at ~15fps during video calls.
+            // Poll for new video frames at ~30fps during video calls.
             // The decoder runs at full speed; this just controls how often
             // iced picks up the latest frame for display.
             if is_video_call && is_active_call {
                 subs.push(
-                    iced::time::every(Duration::from_millis(66))
+                    iced::time::every(Duration::from_millis(33))
                         .map(|_| Message::VideoFrameTick),
                 );
             }
@@ -592,7 +592,8 @@ impl DesktopApp {
                 // No-op: triggers a re-render so the duration display updates.
             }
             Message::VideoFrameTick => {
-                // No-op: triggers a re-render so the video frame display updates.
+                // Check for stale remote video and trigger re-render for new frames.
+                self.video_pipeline.check_staleness();
             }
         }
 

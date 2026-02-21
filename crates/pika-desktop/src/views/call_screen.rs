@@ -177,34 +177,8 @@ fn build_video_call_layout<'a>(
         );
     }
 
-    // Duration
-    if matches!(call.status, CallStatus::Active) {
-        if let Some(started_at) = call.started_at {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            let elapsed = (now - started_at).max(0);
-            let mins = elapsed / 60;
-            let secs = elapsed % 60;
-            overlay = overlay.push(
-                container(
-                    text(format!("{mins:02}:{secs:02}"))
-                        .size(16)
-                        .color(iced::Color::WHITE),
-                )
-                .padding([2, 8])
-                .center_x(Fill)
-                .style(|_: &Theme| container::Style {
-                    background: Some(iced::Background::Color(iced::Color::from_rgba(
-                        0.0, 0.0, 0.0, 0.5,
-                    ))),
-                    border: iced::border::rounded(6),
-                    ..Default::default()
-                }),
-            );
-        }
-    }
+    // Duration and debug stats
+    overlay = push_duration_and_debug(overlay, call);
 
     overlay = overlay.push(Space::new().height(Fill));
 
@@ -263,8 +237,17 @@ fn push_duration_and_debug<'a>(
     }
 
     if let Some(debug) = &call.debug {
+        let video_stats = if debug.video_tx > 0 || debug.video_rx > 0 {
+            let mut s = format!(" vtx:{} vrx:{}", debug.video_tx, debug.video_rx);
+            if debug.video_rx_decrypt_fail > 0 {
+                s += &format!(" vfail:{}", debug.video_rx_decrypt_fail);
+            }
+            s
+        } else {
+            String::new()
+        };
         let stats = format!(
-            "TX:{} RX:{} drop:{} jitter:{}ms{}",
+            "TX:{} RX:{} drop:{} jitter:{}ms{}{}",
             debug.tx_frames,
             debug.rx_frames,
             debug.rx_dropped,
@@ -272,7 +255,8 @@ fn push_duration_and_debug<'a>(
             debug
                 .last_rtt_ms
                 .map(|rtt| format!(" rtt:{rtt}ms"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            video_stats,
         );
         content = content.push(
             container(

@@ -65,25 +65,10 @@ struct ChatCallToolbarButton: View {
     }
 
     private func startMicPermissionAction(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in
-            let granted = await CallMicrophonePermission.ensureGranted()
-            if granted {
-                action()
-            } else {
-                showMicDeniedAlert = true
-            }
-        }
+        CallPermissionActions.withMicPermission(onDenied: { showMicDeniedAlert = true }, action: action)
     }
 
     private func startMicAndCameraPermissionAction(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in
-            let micGranted = await CallMicrophonePermission.ensureGranted()
-            let camGranted = await CallCameraPermission.ensureGranted()
-            if micGranted && camGranted {
-                action()
-            } else {
-                showMicDeniedAlert = true
-            }
-        }
+        CallPermissionActions.withMicAndCameraPermission(onDenied: { showMicDeniedAlert = true }, action: action)
     }
 }

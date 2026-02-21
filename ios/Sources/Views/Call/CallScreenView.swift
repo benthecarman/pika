@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import os
 import SwiftUI
 import UIKit
 
@@ -186,13 +187,23 @@ struct CallScreenView: View {
 
                     Spacer()
 
-                    if let duration = callDurationText(startedAt: call.startedAt), call.isLive {
-                        Text(duration)
-                            .font(.callout.monospacedDigit().weight(.medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.5), in: Capsule())
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if let duration = callDurationText(startedAt: call.startedAt), call.isLive {
+                            Text(duration)
+                                .font(.callout.monospacedDigit().weight(.medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.5), in: Capsule())
+                        }
+                        if let debug = call.debug {
+                            Text(formattedCallDebugStats(debug))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.7))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.5), in: Capsule())
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -418,7 +429,7 @@ struct CallScreenView: View {
             try session.overrideOutputAudioPort(isSpeakerOn ? .none : .speaker)
             syncSpeakerState()
         } catch {
-            NSLog("Failed to toggle speaker: \(error)")
+            Logger(subsystem: "chat.pika", category: "CallScreenView").error("Failed to toggle speaker: \(error.localizedDescription)")
         }
     }
     private func updateProximityMonitoring() {
@@ -445,26 +456,11 @@ struct CallScreenView: View {
     }
 
     private func startMicPermissionAction(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in
-            let granted = await CallMicrophonePermission.ensureGranted()
-            if granted {
-                action()
-            } else {
-                showMicDeniedAlert = true
-            }
-        }
+        CallPermissionActions.withMicPermission(onDenied: { showMicDeniedAlert = true }, action: action)
     }
 
     private func startMicAndCameraPermissionAction(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in
-            let micGranted = await CallMicrophonePermission.ensureGranted()
-            let camGranted = await CallCameraPermission.ensureGranted()
-            if micGranted && camGranted {
-                action()
-            } else {
-                showMicDeniedAlert = true
-            }
-        }
+        CallPermissionActions.withMicAndCameraPermission(onDenied: { showMicDeniedAlert = true }, action: action)
     }
 }
 
