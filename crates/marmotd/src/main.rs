@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::Instant;
 use tracing::{Level, info, warn};
 
-mod call_stt;
+mod call_audio;
 mod call_tts;
 mod daemon;
 

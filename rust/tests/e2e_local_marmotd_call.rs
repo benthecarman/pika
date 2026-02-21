@@ -325,8 +325,7 @@ impl DaemonHandle {
         if use_real_ai {
             cmd.env("OPENAI_API_KEY", std::env::var("OPENAI_API_KEY").unwrap());
         } else {
-            cmd.env("MARMOT_STT_FIXTURE_TEXT", "hello from fixture")
-                .env("MARMOT_TTS_FIXTURE", "1");
+            cmd.env("MARMOT_TTS_FIXTURE", "1");
         }
         let mut child = cmd
             .env(
@@ -725,27 +724,22 @@ fn run_marmotd_call_test(relay_url: &str, moq_url: &str) {
             },
         );
     } else if use_real_ai {
-        // Real AI: keep call active for 4s+ so STT accumulates its 3s window.
-        // Synthetic audio won't produce a real transcript, but proves the pipeline works.
+        // Real AI: keep call active for 4s+ so the silence segmenter can accumulate audio.
         eprintln!("[test] real AI mode: waiting for daemon to receive 200+ frames (4s)...");
-        daemon.wait_for_event(
-            "daemon accumulating audio for real STT",
-            Duration::from_secs(30),
-            |v| {
-                v.get("type").and_then(|t| t.as_str()) == Some("call_debug")
-                    && v.get("call_id")
-                        .and_then(|c| c.as_str())
-                        .map(|c| c == call_id)
-                        .unwrap_or(false)
-                    && v.get("rx_frames")
-                        .and_then(|n| n.as_u64())
-                        .map(|n| n >= 200)
-                        .unwrap_or(false)
-            },
-        );
-        eprintln!("[test] daemon received 200+ frames, STT pipeline running without errors");
+        daemon.wait_for_event("daemon accumulating audio", Duration::from_secs(30), |v| {
+            v.get("type").and_then(|t| t.as_str()) == Some("call_debug")
+                && v.get("call_id")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c == call_id)
+                    .unwrap_or(false)
+                && v.get("rx_frames")
+                    .and_then(|n| n.as_u64())
+                    .map(|n| n >= 200)
+                    .unwrap_or(false)
+        });
+        eprintln!("[test] daemon received 200+ frames, audio pipeline running without errors");
     } else {
-        // Fixture STT: just wait for daemon to receive some frames.
+        // Fixture mode: just wait for daemon to receive some frames.
         daemon.wait_for_event(
             "daemon stt receiving frames",
             Duration::from_secs(20),
@@ -778,30 +772,37 @@ fn run_marmotd_call_test(relay_url: &str, moq_url: &str) {
     }
 
     if !require_rx {
-        // In fixture mode, wait for transcript. In real AI mode, synthetic audio
-        // won't produce a transcript, so skip that check.
-        if !use_real_ai {
-            let transcript = daemon.wait_for_event(
-                "daemon call_transcript_final",
-                Duration::from_secs(20),
-                |v| {
-                    v.get("type").and_then(|t| t.as_str()) == Some("call_transcript_final")
+        // Wait for an audio chunk to be emitted by the silence segmenter.
+        {
+            let audio_chunk =
+                daemon.wait_for_event("daemon call_audio_chunk", Duration::from_secs(30), |v| {
+                    v.get("type").and_then(|t| t.as_str()) == Some("call_audio_chunk")
                         && v.get("call_id")
                             .and_then(|c| c.as_str())
                             .map(|c| c == call_id)
                             .unwrap_or(false)
-                },
-            );
-            let text = transcript
-                .get("text")
-                .and_then(|t| t.as_str())
+                });
+            let audio_path = audio_chunk
+                .get("audio_path")
+                .and_then(|p| p.as_str())
                 .unwrap_or("")
                 .to_string();
-            eprintln!("[test] transcript final: {text:?}");
+            eprintln!("[test] audio chunk path: {audio_path:?}");
             assert!(
-                text.contains("hello from fixture"),
-                "expected fixture transcript, got {text:?}"
+                !audio_path.is_empty(),
+                "expected non-empty audio_path in call_audio_chunk"
             );
+            // Verify the WAV file exists and has valid RIFF header
+            let wav_data = std::fs::read(&audio_path)
+                .unwrap_or_else(|e| panic!("failed to read WAV file at {audio_path}: {e}"));
+            assert!(
+                wav_data.len() > 44,
+                "WAV file too short ({} bytes)",
+                wav_data.len()
+            );
+            assert_eq!(&wav_data[0..4], b"RIFF", "missing RIFF header in WAV file");
+            assert_eq!(&wav_data[8..12], b"WAVE", "missing WAVE marker in WAV file");
+            eprintln!("[test] audio chunk WAV valid ({} bytes)", wav_data.len());
         }
 
         // Test TTS: command daemon to publish audio response back into the call.

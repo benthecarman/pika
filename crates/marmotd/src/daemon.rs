@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::call_stt::{OpusToTranscriptPipeline, transcriber_from_env};
+use crate::call_audio::OpusToAudioPipeline;
 use crate::call_tts::synthesize_tts_pcm;
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -172,9 +172,11 @@ enum OutMsg {
         rx_frames: u64,
         rx_dropped: u64,
     },
-    CallTranscriptFinal {
+    CallAudioChunk {
         call_id: String,
-        text: String,
+        audio_path: String,
+        sample_rate: u32,
+        channels: u8,
     },
 }
 
@@ -236,9 +238,11 @@ struct CallMediaCryptoContext {
 
 #[derive(Debug)]
 enum CallWorkerEvent {
-    TranscriptFinal {
+    AudioChunk {
         call_id: String,
-        text: String,
+        audio_path: String,
+        sample_rate: u32,
+        channels: u8,
     },
     AudioPublished {
         call_id: String,
@@ -801,6 +805,7 @@ fn derive_mls_media_crypto_context(
     })
 }
 
+#[allow(dead_code)]
 async fn publish_group_message(
     client: &Client,
     relay_urls: &[RelayUrl],
@@ -1256,13 +1261,11 @@ fn start_stt_worker_with_relay(
         .subscribe(&subscribe_track)
         .context("subscribe peer track for stt")?;
 
-    let mut pipeline = OpusToTranscriptPipeline::new(
-        track.sample_rate,
-        track.channels,
-        transcriber_from_env().context("initialize stt transcriber")?,
-    )
-    .context("initialize stt pipeline")?;
+    let mut pipeline = OpusToAudioPipeline::new(track.sample_rate, track.channels)
+        .context("initialize audio pipeline")?;
 
+    let sample_rate = track.sample_rate;
+    let channels = track.channels;
     let call_id = call_id.to_string();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_task = stop.clone();
@@ -1270,9 +1273,32 @@ fn start_stt_worker_with_relay(
         // Keep the media session alive for as long as the worker runs.
         // (Even if it is not used directly in this thread.)
         let _media = media;
+        let tmp_dir = std::env::temp_dir().join(format!("marmotd-audio-{}", call_id));
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let mut chunk_seq = 0u64;
         let mut rx_frames = 0u64;
         let mut rx_decrypt_dropped = 0u64;
         let mut ticks = 0u64;
+
+        let emit_chunk = |wav: Vec<u8>,
+                          seq: &mut u64,
+                          call_id: &str,
+                          call_evt_tx: &mpsc::UnboundedSender<CallWorkerEvent>,
+                          tmp_dir: &std::path::Path| {
+            let wav_path = tmp_dir.join(format!("chunk_{seq}.wav"));
+            if let Err(err) = std::fs::write(&wav_path, &wav) {
+                warn!("[marmotd] write audio chunk failed call_id={call_id} err={err}");
+                return;
+            }
+            *seq += 1;
+            let _ = call_evt_tx.send(CallWorkerEvent::AudioChunk {
+                call_id: call_id.to_string(),
+                audio_path: wav_path.to_string_lossy().to_string(),
+                sample_rate,
+                channels,
+            });
+        };
+
         while !stop_for_task.load(Ordering::Relaxed) {
             while let Ok(inbound) = rx.try_recv() {
                 let decrypted = match decrypt_frame(&inbound.payload, &media_crypto.rx_keys) {
@@ -1284,20 +1310,8 @@ fn start_stt_worker_with_relay(
                     }
                 };
                 rx_frames = rx_frames.saturating_add(1);
-                match pipeline.ingest_packet(OpusPacket(decrypted.payload)) {
-                    Ok(Some(text)) => {
-                        let _ = call_evt_tx.send(CallWorkerEvent::TranscriptFinal {
-                            call_id: call_id.clone(),
-                            text,
-                        });
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        warn!(
-                            "[marmotd] stt ingest failed call_id={} err={err:#}",
-                            call_id
-                        );
-                    }
+                if let Some(wav) = pipeline.ingest_packet(OpusPacket(decrypted.payload)) {
+                    emit_chunk(wav, &mut chunk_seq, &call_id, &call_evt_tx, &tmp_dir);
                 }
             }
 
@@ -1313,17 +1327,8 @@ fn start_stt_worker_with_relay(
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        match pipeline.flush() {
-            Ok(Some(text)) => {
-                let _ = call_evt_tx.send(CallWorkerEvent::TranscriptFinal {
-                    call_id: call_id.clone(),
-                    text,
-                });
-            }
-            Ok(None) => {}
-            Err(err) => {
-                warn!("[marmotd] stt flush failed call_id={} err={err:#}", call_id);
-            }
+        if let Some(wav) = pipeline.flush() {
+            emit_chunk(wav, &mut chunk_seq, &call_id, &call_evt_tx, &tmp_dir);
         }
     });
 
@@ -1364,24 +1369,35 @@ fn start_stt_worker_with_transport(
         // alive for as long as we're consuming frames.
         let _transport = transport;
 
-        // Build the STT pipeline here (inside spawn_blocking) because
-        // reqwest::blocking::Client panics when created inside a tokio runtime.
-        let mut pipeline = match OpusToTranscriptPipeline::new(
-            sample_rate,
-            channels,
-            match transcriber_from_env() {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("[stt] transcriber init failed: {e:#}");
-                    return;
-                }
-            },
-        ) {
+        let mut pipeline = match OpusToAudioPipeline::new(sample_rate, channels) {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!("[stt] pipeline init failed: {e:#}");
                 return;
             }
+        };
+
+        let tmp_dir = std::env::temp_dir().join(format!("marmotd-audio-{}", call_id));
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let mut chunk_seq = 0u64;
+
+        let emit_chunk = |wav: Vec<u8>,
+                          seq: &mut u64,
+                          call_id: &str,
+                          call_evt_tx: &mpsc::UnboundedSender<CallWorkerEvent>,
+                          tmp_dir: &std::path::Path| {
+            let wav_path = tmp_dir.join(format!("chunk_{seq}.wav"));
+            if let Err(err) = std::fs::write(&wav_path, &wav) {
+                warn!("[marmotd] write audio chunk failed call_id={call_id} err={err}");
+                return;
+            }
+            *seq += 1;
+            let _ = call_evt_tx.send(CallWorkerEvent::AudioChunk {
+                call_id: call_id.to_string(),
+                audio_path: wav_path.to_string_lossy().to_string(),
+                sample_rate,
+                channels,
+            });
         };
 
         let mut rx_frames = 0u64;
@@ -1398,20 +1414,8 @@ fn start_stt_worker_with_transport(
                     }
                 };
                 rx_frames = rx_frames.saturating_add(1);
-                match pipeline.ingest_packet(OpusPacket(decrypted.payload)) {
-                    Ok(Some(text)) => {
-                        let _ = call_evt_tx.send(CallWorkerEvent::TranscriptFinal {
-                            call_id: call_id.clone(),
-                            text,
-                        });
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        warn!(
-                            "[marmotd] stt ingest failed call_id={} err={err:#}",
-                            call_id
-                        );
-                    }
+                if let Some(wav) = pipeline.ingest_packet(OpusPacket(decrypted.payload)) {
+                    emit_chunk(wav, &mut chunk_seq, &call_id, &call_evt_tx, &tmp_dir);
                 }
             }
 
@@ -1427,17 +1431,8 @@ fn start_stt_worker_with_transport(
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        match pipeline.flush() {
-            Ok(Some(text)) => {
-                let _ = call_evt_tx.send(CallWorkerEvent::TranscriptFinal {
-                    call_id: call_id.clone(),
-                    text,
-                });
-            }
-            Ok(None) => {}
-            Err(err) => {
-                warn!("[marmotd] stt flush failed call_id={} err={err:#}", call_id);
-            }
+        if let Some(wav) = pipeline.flush() {
+            emit_chunk(wav, &mut chunk_seq, &call_id, &call_evt_tx, &tmp_dir);
         }
     });
 
@@ -2606,83 +2601,13 @@ pub async fn daemon_main(
             call_evt = call_evt_rx.recv() => {
                 let Some(call_evt) = call_evt else { continue; };
                 match call_evt {
-                    CallWorkerEvent::TranscriptFinal { call_id, text } => {
-                        // Always surface transcripts to the controller, even if the call has
-                        // already ended (e.g. flush-on-stop can race with call teardown).
-                        let Some(call) = active_call
-                            .as_mut()
-                            .filter(|c| c.call_id == call_id) else {
-                                let _ = out_tx.send(OutMsg::CallTranscriptFinal {
-                                    call_id: call_id.clone(),
-                                    text: text.clone(),
-                                });
-                                continue;
-                            };
-                        let nostr_group_id = call.nostr_group_id.clone();
-                        let session = call.session.clone();
-                        let media_crypto = call.media_crypto.clone();
-                        let start_seq = call.next_voice_seq;
-
-                        let _ = out_tx.send(OutMsg::CallTranscriptFinal {
-                            call_id: call_id.clone(),
-                            text: text.clone(),
+                    CallWorkerEvent::AudioChunk { call_id, audio_path, sample_rate, channels } => {
+                        let _ = out_tx.send(OutMsg::CallAudioChunk {
+                            call_id,
+                            audio_path,
+                            sample_rate,
+                            channels,
                         });
-
-                        // When a controller (e.g. OpenClaw JS plugin) is connected via
-                        // stdin/stdout JSON-RPC, it owns the reply pipeline: it dispatches
-                        // the transcript to an LLM, runs TTS, and sends audio back via
-                        // SendAudioWav.  The daemon should NOT also publish a group text
-                        // message (which echoes the caller's speech as a chat bubble) or
-                        // run its own TTS (which would double-speak).
-                        //
-                        // The built-in TTS + group-message path is only useful for
-                        // standalone marmotd without a controller.  Detect the controller
-                        // by checking whether stdin is a pipe (i.e. spawned by a parent
-                        // process) vs a terminal.
-                        let has_controller = !atty::is(atty::Stream::Stdin);
-
-                        if !has_controller {
-                            if let Err(err) = publish_group_message(
-                                &client,
-                                &relay_urls,
-                                &mdk,
-                                &keys,
-                                &nostr_group_id,
-                                text.clone(),
-                                "call_transcript_final",
-                            )
-                            .await
-                            {
-                                warn!(
-                                    "[marmotd] call transcript publish failed call_id={} group={} err={err:#}",
-                                    call_id, nostr_group_id
-                                );
-                            }
-
-                            // Publish TTS audio response (standalone mode only).
-                            match publish_tts_audio_response(
-                                &session,
-                                &media_crypto,
-                                start_seq,
-                                &text,
-                            ) {
-                                Ok(stats) => {
-                                    if let Some(call) = active_call.as_mut().filter(|c| c.call_id == call_id) {
-                                        call.next_voice_seq = stats.next_seq;
-                                    }
-                                    tracing::info!(
-                                        "[marmotd] tts response published call_id={} frames={}",
-                                        call_id, stats.frames_published
-                                    );
-                                }
-                                Err(err) => {
-                                    warn!(
-                                        "[marmotd] tts response failed call_id={} err={err:#}",
-                                        call_id
-                                    );
-                                }
-                            }
-                        }
                     }
                     CallWorkerEvent::AudioPublished { call_id, request_id, result } => {
                         match result {

@@ -48,14 +48,11 @@ type SidecarOutMsg =
       rx_dropped: number;
     }
   | {
-      type: "call_transcript_partial";
+      type: "call_audio_chunk";
       call_id: string;
-      text: string;
-    }
-  | {
-      type: "call_transcript_final";
-      call_id: string;
-      text: string;
+      audio_path: string;
+      sample_rate: number;
+      channels: number;
     };
 
 type SidecarInCmd =
