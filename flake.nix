@@ -208,6 +208,7 @@
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             pkgs.xvfb-run
             pkgs.alsa-lib
+            pkgs.llvmPackages.libclang
           ] ++ linuxGuiRuntimeLibraries;
 
           shellHook = ''
@@ -223,6 +224,7 @@
             export PATH=$PWD/tools:$PATH
 
             if [ "$(uname -s)" = "Linux" ] && [ -n "${linuxGuiRuntimeLibraryPath}" ]; then
+              export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
               export LD_LIBRARY_PATH="${linuxGuiRuntimeLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               export WINIT_UNIX_BACKEND="x11"
               export LIBGL_DRIVERS_PATH="${linuxMesaDriversPath}''${LIBGL_DRIVERS_PATH:+:$LIBGL_DRIVERS_PATH}"
