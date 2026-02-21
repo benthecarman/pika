@@ -32,7 +32,7 @@ final class CallAudioSessionCoordinator {
             try session.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: [.defaultToSpeaker, .allowBluetoothHFP]
+                options: [.allowBluetoothHFP]
             )
             try session.setActive(true)
             isActive = true

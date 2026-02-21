@@ -1,3 +1,4 @@
+import AVFAudio
 import SwiftUI
 
 @MainActor
@@ -12,6 +13,7 @@ struct CallScreenView: View {
     let onDismiss: @MainActor () -> Void
 
     @State private var showMicDeniedAlert = false
+    @State private var isSpeakerOn = false
 
     var body: some View {
         ZStack {
@@ -70,6 +72,10 @@ struct CallScreenView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
         }
+        .onAppear { syncSpeakerState() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            syncSpeakerState()
+        }
         .alert("Microphone Permission Needed", isPresented: $showMicDeniedAlert) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -121,7 +127,7 @@ struct CallScreenView: View {
                 .accessibilityIdentifier(TestIds.chatCallAccept)
             }
         case .offering, .connecting, .active:
-            HStack(spacing: 48) {
+            HStack(spacing: 36) {
                 CallControlButton(
                     title: call.isMuted ? "Unmute" : "Mute",
                     systemImage: call.isMuted ? "mic.slash.fill" : "mic.fill",
@@ -130,6 +136,15 @@ struct CallScreenView: View {
                     onToggleMute()
                 }
                 .accessibilityIdentifier(TestIds.chatCallMute)
+
+                CallControlButton(
+                    title: isSpeakerOn ? "Speaker" : "Speaker",
+                    systemImage: isSpeakerOn ? "speaker.wave.2.fill" : "speaker.fill",
+                    tint: isSpeakerOn ? .orange : .white.opacity(0.25)
+                ) {
+                    toggleSpeaker()
+                }
+                .accessibilityIdentifier(TestIds.chatCallSpeaker)
 
                 CallControlButton(
                     title: "End",
@@ -163,6 +178,21 @@ struct CallScreenView: View {
                     .accessibilityIdentifier(TestIds.chatCallStart)
                 }
             }
+        }
+    }
+
+    private func syncSpeakerState() {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        isSpeakerOn = route.outputs.contains { $0.portType == .builtInSpeaker }
+    }
+
+    private func toggleSpeaker() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.overrideOutputAudioPort(isSpeakerOn ? .none : .speaker)
+            syncSpeakerState()
+        } catch {
+            NSLog("Failed to toggle speaker: \(error)")
         }
     }
 

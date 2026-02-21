@@ -52,6 +52,7 @@ enum TestIds {
     static let chatCallReject = "chat_call_reject"
     static let chatCallEnd = "chat_call_end"
     static let chatCallMute = "chat_call_mute"
+    static let chatCallSpeaker = "chat_call_speaker"
     static let callScreenDismiss = "call_screen_dismiss"
     static let callReturnToCall = "call_return_to_call"
     static let callTimelineEvent = "call_timeline_event"
