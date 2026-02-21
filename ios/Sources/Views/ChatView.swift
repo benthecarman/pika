@@ -824,8 +824,8 @@ private struct FocusedMessageCard: View {
     private var markdownContent: some View {
         Markdown(message.displayContent)
             .markdownTheme(message.isMine ? .pikaOutgoing : .pikaIncoming)
-            .multilineTextAlignment(message.isMine ? .trailing : .leading)
-            .frame(maxWidth: .infinity, alignment: message.isMine ? .trailing : .leading)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var isLikelyLongMessage: Bool {
@@ -1141,7 +1141,7 @@ private struct MessageGroupRow: View {
 
     private var outgoingRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Spacer(minLength: 24)
+            Spacer(minLength: 48)
 
             VStack(alignment: .trailing, spacing: 3) {
                 MessageBubbleStack(
@@ -1275,10 +1275,10 @@ private struct MessageBubble: View {
     }
 
     private func markdownBubble(text: String) -> some View {
-        VStack(alignment: message.isMine ? .trailing : .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
             Markdown(text)
                 .markdownTheme(message.isMine ? .pikaOutgoing : .pikaIncoming)
-                .multilineTextAlignment(message.isMine ? .trailing : .leading)
+                .multilineTextAlignment(.leading)
 
             Text(timestampText)
                 .font(.caption2)
