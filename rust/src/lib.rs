@@ -64,6 +64,13 @@ pub trait AppReconciler: Send + Sync + 'static {
     fn reconcile(&self, update: AppUpdate);
 }
 
+/// Platform-side callback for receiving decoded video frames from remote peers.
+/// Called from the video worker thread at ~30fps during active video calls.
+#[uniffi::export(callback_interface)]
+pub trait VideoFrameReceiver: Send + Sync + 'static {
+    fn on_video_frame(&self, call_id: String, payload: Vec<u8>);
+}
+
 #[derive(uniffi::Object)]
 pub struct FfiApp {
     core_tx: Sender<CoreMsg>,
@@ -72,6 +79,7 @@ pub struct FfiApp {
     shared_state: Arc<RwLock<AppState>>,
     external_signer_bridge: SharedExternalSignerBridgeType,
     bunker_signer_connector: SharedBunkerSignerConnectorType,
+    video_frame_receiver: Arc<RwLock<Option<Arc<dyn VideoFrameReceiver>>>>,
 }
 
 #[uniffi::export]
@@ -90,12 +98,15 @@ impl FfiApp {
         let bunker_signer_connector: SharedBunkerSignerConnectorType = Arc::new(RwLock::new(
             Arc::new(NostrConnectBunkerSignerConnectorImpl::default()),
         ));
+        let video_frame_receiver: Arc<RwLock<Option<Arc<dyn VideoFrameReceiver>>>> =
+            Arc::new(RwLock::new(None));
 
         // Actor loop thread (single threaded "app actor").
         let core_tx_for_core = core_tx.clone();
         let shared_for_core = shared_state.clone();
         let signer_bridge_for_core = external_signer_bridge.clone();
         let bunker_connector_for_core = bunker_signer_connector.clone();
+        let video_receiver_for_core = video_frame_receiver.clone();
         thread::spawn(move || {
             let mut core = crate::core::AppCore::new(
                 update_tx,
@@ -106,6 +117,7 @@ impl FfiApp {
                 signer_bridge_for_core,
                 bunker_connector_for_core,
             );
+            core.set_video_frame_receiver(video_receiver_for_core);
             while let Ok(msg) = core_rx.recv() {
                 core.handle_message(msg);
             }
@@ -118,6 +130,7 @@ impl FfiApp {
             shared_state,
             external_signer_bridge,
             bunker_signer_connector,
+            video_frame_receiver,
         })
     }
 
@@ -149,6 +162,24 @@ impl FfiApp {
                 reconciler.reconcile(update);
             }
         });
+    }
+
+    pub fn set_video_frame_receiver(&self, receiver: Box<dyn VideoFrameReceiver>) {
+        let receiver: Arc<dyn VideoFrameReceiver> = Arc::from(receiver);
+        match self.video_frame_receiver.write() {
+            Ok(mut slot) => {
+                *slot = Some(receiver);
+            }
+            Err(poison) => {
+                *poison.into_inner() = Some(receiver);
+            }
+        }
+    }
+
+    pub fn send_video_frame(&self, payload: Vec<u8>) {
+        let _ = self.core_tx.send(CoreMsg::Internal(Box::new(
+            InternalEvent::VideoFrameFromPlatform { payload },
+        )));
     }
 
     pub fn set_external_signer_bridge(&self, bridge: Box<dyn ExternalSignerBridgeTrait>) {

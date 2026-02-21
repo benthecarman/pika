@@ -1,5 +1,20 @@
 const PARTICIPANT_LABEL_HEX_LEN: usize = 64;
 
+/// Shared video encoding parameters used by all platforms.
+/// Platform capture/encode code should reference these rather than hardcoding values.
+pub mod video_params {
+    /// Target frame rate for video capture and encoding (frames per second).
+    pub const FPS: u32 = 30;
+    /// Target encoded bitrate in bits per second (1.5 Mbps).
+    pub const BITRATE_BPS: u32 = 1_500_000;
+    /// Keyframe interval in frames (every 2 seconds at 30fps).
+    pub const KEYFRAME_INTERVAL: u32 = 60;
+    /// Target capture width (landscape dimension).
+    pub const WIDTH: u32 = 1280;
+    /// Target capture height (landscape dimension).
+    pub const HEIGHT: u32 = 720;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackSpec {
     pub name: String,
@@ -16,6 +31,16 @@ pub fn default_audio_track() -> TrackSpec {
         sample_rate: 48_000,
         channels: 1,
         frame_ms: 20,
+    }
+}
+
+pub fn default_video_track() -> TrackSpec {
+    TrackSpec {
+        name: "video0".to_string(),
+        codec: "h264".to_string(),
+        sample_rate: 90_000,
+        channels: 0,
+        frame_ms: 33,
     }
 }
 

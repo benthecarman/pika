@@ -71,7 +71,7 @@ class NotificationService: UNNotificationServiceExtension {
             }
         case .callInvite(let info):
             content.title = info.callerName
-            content.body = "Incoming call"
+            content.body = info.isVideo ? "Incoming video call" : "Incoming call"
             content.sound = .defaultCritical
             content.userInfo["chat_id"] = info.chatId
             content.userInfo["call_id"] = info.callId

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::TryRecvError;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,7 @@ use pika_media::subscription::MediaFrameSubscription;
 use pika_media::tracks::{broadcast_path, TrackAddress};
 
 use crate::updates::{CoreMsg, InternalEvent};
+use crate::VideoFrameReceiver;
 
 use super::call_control::CallSessionParams;
 
@@ -31,15 +32,40 @@ const MAX_RX_FRAMES_PER_TICK: usize = 4;
 const STATS_EMIT_INTERVAL_TICKS: u64 = 5;
 const RX_REPLAY_WINDOW_FRAMES: u64 = 128;
 
+const VIDEO_FRAME_DURATION_MS: u32 = 33;
+const VIDEO_FRAME_DURATION: Duration = Duration::from_millis(VIDEO_FRAME_DURATION_MS as u64);
+const VIDEO_FRAME_DURATION_US: u64 = (VIDEO_FRAME_DURATION_MS as u64) * 1_000;
+
+#[derive(Debug, Default)]
+struct SharedVideoStats {
+    tx_count: AtomicU64,
+    rx_count: AtomicU64,
+    rx_decrypt_fail: AtomicU64,
+}
+
 #[derive(Debug)]
 struct CallWorker {
     stop: Arc<AtomicBool>,
     muted: Arc<AtomicBool>,
+    camera_enabled: Arc<AtomicBool>,
+    video_stop: Option<Arc<AtomicBool>>,
+    video_frame_tx: Option<std::sync::mpsc::Sender<Vec<u8>>>,
 }
 
-#[derive(Debug, Default)]
+type SharedVideoFrameReceiver = Arc<RwLock<Option<Arc<dyn VideoFrameReceiver>>>>;
+
+#[derive(Default)]
 pub(super) struct CallRuntime {
     workers: HashMap<String, CallWorker>, // call_id -> worker
+    video_frame_receiver: Option<SharedVideoFrameReceiver>,
+}
+
+impl std::fmt::Debug for CallRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallRuntime")
+            .field("workers", &self.workers.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -128,6 +154,10 @@ impl MediaTransport {
 }
 
 impl CallRuntime {
+    pub(super) fn set_video_frame_receiver(&mut self, receiver: SharedVideoFrameReceiver) {
+        self.video_frame_receiver = Some(receiver);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn on_call_connecting(
         &mut self,
@@ -160,11 +190,11 @@ impl CallRuntime {
             broadcast_path(&session.broadcast_base, &media_ctx.local_participant_label)?;
         let peer_path = broadcast_path(&session.broadcast_base, &media_ctx.peer_participant_label)?;
         let publish_track = TrackAddress {
-            broadcast_path: local_path,
+            broadcast_path: local_path.clone(),
             track_name: "audio0".to_string(),
         };
         let subscribe_track = TrackAddress {
-            broadcast_path: peer_path,
+            broadcast_path: peer_path.clone(),
             track_name: "audio0".to_string(),
         };
         let rx = transport
@@ -173,6 +203,132 @@ impl CallRuntime {
         let tx_keys = media_ctx.tx_keys;
         let rx_keys = media_ctx.rx_keys;
 
+        // Video setup: use the same MoQ transport for video (shared QUIC connection)
+        let has_video = media_ctx.video_tx_keys.is_some();
+        let video_stats_shared = Arc::new(SharedVideoStats::default());
+        let transport = Arc::new(transport);
+        let video_frame_tx = if has_video {
+            let video_publish_track = TrackAddress {
+                broadcast_path: local_path,
+                track_name: "video0".to_string(),
+            };
+            let video_subscribe_track = TrackAddress {
+                broadcast_path: peer_path,
+                track_name: "video0".to_string(),
+            };
+
+            let video_rx = transport
+                .subscribe(&video_subscribe_track)
+                .map_err(to_string_error)?;
+            let video_tx_keys = media_ctx.video_tx_keys.unwrap();
+            let video_rx_keys = media_ctx.video_rx_keys.unwrap();
+
+            let (vtx, vrx) = std::sync::mpsc::channel::<Vec<u8>>();
+            let call_id_for_video = call_id.to_string();
+            let stop_for_video = Arc::new(AtomicBool::new(false));
+            let stop_for_video_thread = stop_for_video.clone();
+            let camera_enabled_for_video = Arc::new(AtomicBool::new(true));
+            let camera_for_thread = camera_enabled_for_video.clone();
+            let video_receiver = self.video_frame_receiver.clone();
+            let video_stats_for_thread = video_stats_shared.clone();
+            let video_transport = transport.clone();
+
+            thread::spawn(move || {
+                let mut seq = 0u64;
+                let mut tx_counter = 0u32;
+                let mut next_tick = Instant::now();
+                let mut replay_window = ReplayWindow::default();
+                let mut video_publish_error_logged = false;
+
+                while !stop_for_video_thread.load(Ordering::Relaxed) {
+                    // TX: send platform video frames
+                    if camera_for_thread.load(Ordering::Relaxed) {
+                        while let Ok(payload) = vrx.try_recv() {
+                            let is_keyframe = seq.is_multiple_of(60);
+                            let frame_info = FrameInfo {
+                                counter: tx_counter,
+                                group_seq: seq,
+                                frame_idx: 0,
+                                keyframe: is_keyframe,
+                            };
+                            if tx_counter < u32::MAX {
+                                tx_counter = tx_counter.saturating_add(1);
+                            }
+                            if let Ok(encrypted) =
+                                encrypt_frame(&payload, &video_tx_keys, frame_info)
+                            {
+                                let frame = MediaFrame {
+                                    seq,
+                                    timestamp_us: seq.saturating_mul(VIDEO_FRAME_DURATION_US),
+                                    keyframe: is_keyframe,
+                                    payload: encrypted,
+                                };
+                                match video_transport.publish(&video_publish_track, frame) {
+                                    Ok(_) => {
+                                        seq = seq.saturating_add(1);
+                                        video_stats_for_thread
+                                            .tx_count
+                                            .fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Err(e) => {
+                                        if !video_publish_error_logged {
+                                            video_publish_error_logged = true;
+                                            tracing::error!("video publish failed: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // RX: receive remote video frames
+                    for _ in 0..4 {
+                        match video_rx.try_recv() {
+                            Ok(inbound) => match decrypt_frame(&inbound.payload, &video_rx_keys) {
+                                Ok(decrypted) => {
+                                    if !replay_window.allow(decrypted.info.group_seq) {
+                                        continue;
+                                    }
+                                    video_stats_for_thread
+                                        .rx_count
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    if let Some(ref receiver_lock) = video_receiver {
+                                        if let Ok(guard) = receiver_lock.read() {
+                                            if let Some(ref receiver) = *guard {
+                                                receiver.on_video_frame(
+                                                    call_id_for_video.clone(),
+                                                    decrypted.payload,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    video_stats_for_thread
+                                        .rx_decrypt_fail
+                                        .fetch_add(1, Ordering::Relaxed);
+                                }
+                            },
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => break,
+                        }
+                    }
+
+                    next_tick += VIDEO_FRAME_DURATION;
+                    let now = Instant::now();
+                    if next_tick > now {
+                        thread::sleep(next_tick.saturating_duration_since(now));
+                    } else {
+                        next_tick = now;
+                    }
+                }
+            });
+
+            Some((vtx, stop_for_video, camera_enabled_for_video))
+        } else {
+            None
+        };
+
         let call_id_owned = call_id.to_string();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
@@ -180,6 +336,7 @@ impl CallRuntime {
         let muted_for_thread = muted.clone();
         let tx_for_thread = tx.clone();
         let audio_backend_mode: Option<String> = audio_backend_mode.map(|s| s.to_owned());
+        let video_stats_for_audio = video_stats_shared.clone();
         thread::spawn(move || {
             let mut audio_backend = match AudioBackend::try_new(audio_backend_mode.as_deref()) {
                 Ok(v) => v,
@@ -338,6 +495,11 @@ impl CallRuntime {
                             jitter_buffer_ms: (jitter.len() as u32)
                                 .saturating_mul(FRAME_DURATION_MS),
                             last_rtt_ms: None,
+                            video_tx: video_stats_for_audio.tx_count.load(Ordering::Relaxed),
+                            video_rx: video_stats_for_audio.rx_count.load(Ordering::Relaxed),
+                            video_rx_decrypt_fail: video_stats_for_audio
+                                .rx_decrypt_fail
+                                .load(Ordering::Relaxed),
                         },
                     )));
                 }
@@ -352,8 +514,21 @@ impl CallRuntime {
             }
         });
 
-        self.workers
-            .insert(call_id.to_string(), CallWorker { stop, muted });
+        let (video_sender, video_stop, camera_enabled) = match video_frame_tx {
+            Some((sender, vstop, cam)) => (Some(sender), Some(vstop), cam),
+            None => (None, None, Arc::new(AtomicBool::new(false))),
+        };
+
+        self.workers.insert(
+            call_id.to_string(),
+            CallWorker {
+                stop,
+                muted,
+                camera_enabled,
+                video_stop,
+                video_frame_tx: video_sender,
+            },
+        );
         Ok(())
     }
 
@@ -363,9 +538,28 @@ impl CallRuntime {
         }
     }
 
+    pub(super) fn set_camera_enabled(&mut self, call_id: &str, enabled: bool) {
+        if let Some(worker) = self.workers.get(call_id) {
+            worker.camera_enabled.store(enabled, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn send_video_frame(&self, call_id: &str, payload: Vec<u8>) {
+        if let Some(worker) = self.workers.get(call_id) {
+            if let Some(ref tx) = worker.video_frame_tx {
+                let _ = tx.send(payload);
+            } else {
+                tracing::warn!(call_id, "send_video_frame: no video_frame_tx channel");
+            }
+        }
+    }
+
     pub(super) fn on_call_ended(&mut self, call_id: &str) {
         if let Some(worker) = self.workers.remove(call_id) {
             worker.stop.store(true, Ordering::Relaxed);
+            if let Some(vstop) = &worker.video_stop {
+                vstop.store(true, Ordering::Relaxed);
+            }
         }
     }
 
@@ -385,6 +579,8 @@ fn to_string_error(err: MediaSessionError) -> String {
 pub(super) struct CallMediaCryptoContext {
     pub(super) tx_keys: FrameKeyMaterial,
     pub(super) rx_keys: FrameKeyMaterial,
+    pub(super) video_tx_keys: Option<FrameKeyMaterial>,
+    pub(super) video_rx_keys: Option<FrameKeyMaterial>,
     pub(super) local_participant_label: String,
     pub(super) peer_participant_label: String,
 }

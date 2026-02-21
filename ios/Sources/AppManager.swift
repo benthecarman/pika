@@ -5,6 +5,8 @@ protocol AppCore: AnyObject, Sendable {
     func dispatch(action: AppAction)
     func listenForUpdates(reconciler: AppReconciler)
     func state() -> AppState
+    func setVideoFrameReceiver(receiver: VideoFrameReceiver)
+    func sendVideoFrame(payload: Data)
 }
 
 extension FfiApp: AppCore {}
@@ -105,7 +107,7 @@ final class KeychainAuthStore: AuthStore {
 final class AppManager: AppReconciler {
     private static let developerModeEnabledKey = "developer_mode_enabled"
     private static let migrationSentinelName = ".migrated_to_app_group"
-    private let core: AppCore
+    private(set) var core: AppCore
     var state: AppState
     private var lastRevApplied: UInt64
     private let authStore: AuthStore

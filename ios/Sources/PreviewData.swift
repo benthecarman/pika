@@ -22,6 +22,10 @@ final class PreviewCore: AppCore, @unchecked Sendable {
     func state() -> AppState {
         stateValue
     }
+
+    func setVideoFrameReceiver(receiver: VideoFrameReceiver) {}
+
+    func sendVideoFrame(payload: Data) {}
 }
 
 final class PreviewAuthStore: AuthStore {

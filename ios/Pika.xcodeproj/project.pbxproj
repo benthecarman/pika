@@ -10,6 +10,7 @@
 		02D9A491B498E051D46EC648 /* KeychainNsecStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F912C4C8861A3FB74085329 /* KeychainNsecStore.swift */; };
 		03C30125CB3F0D79FF803A5A /* CallPresentationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1232684703DEB8C200890FF /* CallPresentationModel.swift */; };
 		08133D47DBB1695B4DE59B21 /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01419A0F9FAB3E815A6ECB4A /* LoadingView.swift */; };
+		0F5ABC56006604341C5515F5 /* VideoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06DB45062F8454AE9C79D7B1 /* VideoPreviewView.swift */; };
 		2A9B2872E6ADB03F5A8FA173 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53159E06C561F50F6EC97A61 /* LoginView.swift */; };
 		2D7D78881AF722C0144E3F66 /* PushNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8181E7992E3AF535AF9D22F6 /* PushNotificationManager.swift */; };
 		313101B4B13898A7601D991E /* PeerProfileSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80C8822654DC43F3670179F2 /* PeerProfileSheet.swift */; };
@@ -17,6 +18,7 @@
 		39E4C07E30DE3638E6FEB7AB /* PikaNSE.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AE4BE14E8032BC07DDA64B80 /* PikaNSE.xcframework */; };
 		3B614972940C843FB662920B /* PikaCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3CD38D8437B178B873D96238 /* PikaCore.xcframework */; };
 		4486E2DC2719F40214340777 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 653509E9220610E2699954CB /* MarkdownUI */; };
+		459D8360BD7E1D00DC649CA5 /* VideoCallPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFA97DE6301AAB65E75C08E /* VideoCallPipeline.swift */; };
 		4E79E8EB78FF3FEB6FA4E4E4 /* AppManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B07F038CF3D6A3DC2F37122 /* AppManagerTests.swift */; };
 		502171B59272A56AB36AECCF /* PeerKeyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9B7DE0FCF7AB984004968F9 /* PeerKeyValidator.swift */; };
 		579844A3D058B9932FADF239 /* CallScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA82F45F22008C8DB90D062 /* CallScreenView.swift */; };
@@ -36,9 +38,11 @@
 		970D12403533E203A33FBEFC /* NewChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A62170468ABECD8AAA8B6B6A /* NewChatView.swift */; };
 		9BB9C87B399C1947945DE00C /* CallMicrophonePermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC162670728B5C7C7B3D81E8 /* CallMicrophonePermission.swift */; };
 		A15307C1B4692DC5925858CE /* AppManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B2B1856254D8FE240BC93A /* AppManager.swift */; };
+		A8922A217D269E3B9FE00E1E /* VideoDecoderRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84104171ED49036D7B209EF6 /* VideoDecoderRenderer.swift */; };
 		A9C322754AA45D8880202F42 /* ChatCallToolbarButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A0524BDFDEBAE7F899CD71 /* ChatCallToolbarButton.swift */; };
 		B5F90A17C2DF56BF2B42736E /* NewGroupChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09BE97F6BA133265DB078F8A /* NewGroupChatView.swift */; };
 		BB352F7281B2A9135153370B /* CallTimelineEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 790118951426B1C1F8F18CB5 /* CallTimelineEvent.swift */; };
+		BBBF5F446361CCB434708EDC /* VideoCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39B1E115D7984A67F8C4B3CC /* VideoCaptureManager.swift */; };
 		DE799DF1E97151C517647E61 /* QrScannerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B083A8885A5C0BDDEFCF5EAC /* QrScannerSheet.swift */; };
 		E5B28C6199117D1B6980AA15 /* PikaNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D91AD573E4769708B1CCDC51 /* PikaNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E5BBD4062FF3694131431FDF /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1894ECB75150103D789B6F30 /* NotificationService.swift */; };
@@ -92,6 +96,7 @@
 		01419A0F9FAB3E815A6ECB4A /* LoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadingView.swift; sourceTree = "<group>"; };
 		04278E7A5E984011D10BE79F /* GroupInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupInfoView.swift; sourceTree = "<group>"; };
 		05B2B1856254D8FE240BC93A /* AppManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppManager.swift; sourceTree = "<group>"; };
+		06DB45062F8454AE9C79D7B1 /* VideoPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPreviewView.swift; sourceTree = "<group>"; };
 		0705B2EA2A82DFC41EFF9DCF /* MyNpubQrSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyNpubQrSheet.swift; sourceTree = "<group>"; };
 		09BE97F6BA133265DB078F8A /* NewGroupChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewGroupChatView.swift; sourceTree = "<group>"; };
 		11B93B14504401A3B6D1FE8E /* CallAudioSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudioSessionCoordinator.swift; sourceTree = "<group>"; };
@@ -101,6 +106,7 @@
 		28F1BF02C1AAAEAA33532732 /* KeychainNsecStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainNsecStoreTests.swift; sourceTree = "<group>"; };
 		31A0524BDFDEBAE7F899CD71 /* ChatCallToolbarButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCallToolbarButton.swift; sourceTree = "<group>"; };
 		366C05B721835967C3BE5418 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
+		39B1E115D7984A67F8C4B3CC /* VideoCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCaptureManager.swift; sourceTree = "<group>"; };
 		3B07F038CF3D6A3DC2F37122 /* AppManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppManagerTests.swift; sourceTree = "<group>"; };
 		3CD38D8437B178B873D96238 /* PikaCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = PikaCore.xcframework; path = Frameworks/PikaCore.xcframework; sourceTree = "<group>"; };
 		42E962F7911EF0441F706C10 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -114,7 +120,9 @@
 		790118951426B1C1F8F18CB5 /* CallTimelineEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallTimelineEvent.swift; sourceTree = "<group>"; };
 		80C8822654DC43F3670179F2 /* PeerProfileSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerProfileSheet.swift; sourceTree = "<group>"; };
 		8181E7992E3AF535AF9D22F6 /* PushNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationManager.swift; sourceTree = "<group>"; };
+		84104171ED49036D7B209EF6 /* VideoDecoderRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDecoderRenderer.swift; sourceTree = "<group>"; };
 		8600EE3AFD44A8B726A64716 /* PikaUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PikaUITests.swift; sourceTree = "<group>"; };
+		8BFA97DE6301AAB65E75C08E /* VideoCallPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCallPipeline.swift; sourceTree = "<group>"; };
 		98D9ABB0DBC3DB8798C47D1C /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		9AA82F45F22008C8DB90D062 /* CallScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreenView.swift; sourceTree = "<group>"; };
 		A62170468ABECD8AAA8B6B6A /* NewChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewChatView.swift; sourceTree = "<group>"; };
@@ -242,6 +250,10 @@
 				9AA82F45F22008C8DB90D062 /* CallScreenView.swift */,
 				790118951426B1C1F8F18CB5 /* CallTimelineEvent.swift */,
 				31A0524BDFDEBAE7F899CD71 /* ChatCallToolbarButton.swift */,
+				8BFA97DE6301AAB65E75C08E /* VideoCallPipeline.swift */,
+				39B1E115D7984A67F8C4B3CC /* VideoCaptureManager.swift */,
+				84104171ED49036D7B209EF6 /* VideoDecoderRenderer.swift */,
+				06DB45062F8454AE9C79D7B1 /* VideoPreviewView.swift */,
 			);
 			path = Call;
 			sourceTree = "<group>";
@@ -545,6 +557,10 @@
 				2D7D78881AF722C0144E3F66 /* PushNotificationManager.swift in Sources */,
 				DE799DF1E97151C517647E61 /* QrScannerSheet.swift in Sources */,
 				9581B9688EDC90BCBC177E47 /* TestIds.swift in Sources */,
+				459D8360BD7E1D00DC649CA5 /* VideoCallPipeline.swift in Sources */,
+				BBBF5F446361CCB434708EDC /* VideoCaptureManager.swift in Sources */,
+				A8922A217D269E3B9FE00E1E /* VideoDecoderRenderer.swift in Sources */,
+				0F5ABC56006604341C5515F5 /* VideoPreviewView.swift in Sources */,
 				6BA056C64AC7135C3040F3C5 /* ViewState.swift in Sources */,
 				F2A2C56251354A67641CA82F /* pika_core.swift in Sources */,
 			);

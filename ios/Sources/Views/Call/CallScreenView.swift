@@ -1,5 +1,6 @@
-import AVFAudio
+import AVFoundation
 import Combine
+import os
 import SwiftUI
 import UIKit
 
@@ -11,8 +12,15 @@ struct CallScreenView: View {
     let onRejectCall: @MainActor () -> Void
     let onEndCall: @MainActor () -> Void
     let onToggleMute: @MainActor () -> Void
+    let onToggleCamera: @MainActor () -> Void
+    let onFlipCamera: @MainActor () -> Void
     let onStartAgain: @MainActor () -> Void
     let onDismiss: @MainActor () -> Void
+
+    /// Remote video pixel buffer (decoded H.264 frames from peer).
+    var remotePixelBuffer: CVPixelBuffer?
+    /// Local camera preview session (zero-copy preview layer).
+    var localCaptureSession: AVCaptureSession?
 
     @State private var showMicDeniedAlert = false
     @State private var isSpeakerOn = false
@@ -20,6 +28,46 @@ struct CallScreenView: View {
     @State private var isProximityLocked = false
 
     var body: some View {
+        ZStack {
+            if call.isVideoCall {
+                videoCallBody
+            } else {
+                audioCallBody
+            }
+
+            if isProximityLocked {
+                Color.black
+                    .ignoresSafeArea()
+                    .allowsHitTesting(true)
+            }
+        }
+        .onAppear {
+            updateProximityMonitoring()
+        }
+        .onChange(of: call.shouldEnableProximityLock) { _, _ in
+            updateProximityMonitoring()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.proximityStateDidChangeNotification)) { _ in
+            guard isProximityMonitoringEnabled else { return }
+            isProximityLocked = UIDevice.current.proximityState
+        }
+        .onDisappear {
+            stopProximityMonitoring()
+        }
+        .onAppear { syncSpeakerState() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            syncSpeakerState()
+        }
+        .alert("Microphone Permission Needed", isPresented: $showMicDeniedAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Microphone permission is required for calls.")
+        }
+    }
+
+    // MARK: - Audio Call Layout (existing)
+
+    private var audioCallBody: some View {
         ZStack {
             LinearGradient(
                 colors: [Color.black.opacity(0.95), Color.blue.opacity(0.6)],
@@ -76,36 +124,199 @@ struct CallScreenView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
             .allowsHitTesting(!isProximityLocked)
-
-            if isProximityLocked {
-                Color.black
-                    .ignoresSafeArea()
-                    .allowsHitTesting(true)
-            }
-        }
-        .onAppear {
-            updateProximityMonitoring()
-        }
-        .onChange(of: call.shouldEnableProximityLock) { _, _ in
-            updateProximityMonitoring()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.proximityStateDidChangeNotification)) { _ in
-            guard isProximityMonitoringEnabled else { return }
-            isProximityLocked = UIDevice.current.proximityState
-        }
-        .onDisappear {
-            stopProximityMonitoring()
-        }
-        .onAppear { syncSpeakerState() }
-        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
-            syncSpeakerState()
-        }
-        .alert("Microphone Permission Needed", isPresented: $showMicDeniedAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Microphone permission is required for calls.")
         }
     }
+
+    // MARK: - Video Call Layout
+
+    private var videoCallBody: some View {
+        ZStack {
+            // Remote video fullscreen
+            Color.black.ignoresSafeArea()
+
+            if remotePixelBuffer != nil {
+                RemoteVideoView(pixelBuffer: remotePixelBuffer)
+                    .ignoresSafeArea()
+            } else {
+                // Placeholder while waiting for remote video
+                VStack(spacing: 16) {
+                    Text(peerName)
+                        .font(.system(.title2, design: .rounded).weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(call.status.titleText)
+                        .font(.headline)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+
+            // Local camera preview (PiP corner)
+            VStack {
+                HStack {
+                    Spacer()
+                    if let session = localCaptureSession, call.isCameraEnabled {
+                        CameraPreviewView(session: session)
+                            .frame(width: 120, height: 160)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            )
+                            .shadow(radius: 4)
+                            .padding(.top, 60)
+                            .padding(.trailing, 16)
+                    }
+                }
+                Spacer()
+            }
+
+            // Controls overlay at bottom
+            VStack {
+                // Header row (dismiss button + status)
+                HStack {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(TestIds.callScreenDismiss)
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if let duration = callDurationText(startedAt: call.startedAt), call.isLive {
+                            Text(duration)
+                                .font(.callout.monospacedDigit().weight(.medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.5), in: Capsule())
+                        }
+                        if let debug = call.debug {
+                            Text(formattedCallDebugStats(debug))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.7))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.black.opacity(0.5), in: Capsule())
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                Spacer()
+
+                // Bottom controls
+                videoControlRow
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 24)
+                    .background(
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.6)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: 160)
+                        .offset(y: 20),
+                        alignment: .bottom
+                    )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var videoControlRow: some View {
+        switch call.status {
+        case .ringing:
+            HStack(spacing: 48) {
+                CallControlButton(
+                    title: "Decline",
+                    systemImage: "phone.down.fill",
+                    tint: .red
+                ) {
+                    onRejectCall()
+                }
+                .accessibilityIdentifier(TestIds.chatCallReject)
+
+                CallControlButton(
+                    title: "Accept",
+                    systemImage: "phone.fill",
+                    tint: .green
+                ) {
+                    startMicAndCameraPermissionAction {
+                        onAcceptCall()
+                    }
+                }
+                .accessibilityIdentifier(TestIds.chatCallAccept)
+            }
+        case .offering, .connecting, .active:
+            HStack(spacing: 28) {
+                CallControlButton(
+                    title: call.isMuted ? "Unmute" : "Mute",
+                    systemImage: call.isMuted ? "mic.slash.fill" : "mic.fill",
+                    tint: call.isMuted ? .orange : .white.opacity(0.25)
+                ) {
+                    onToggleMute()
+                }
+                .accessibilityIdentifier(TestIds.chatCallMute)
+
+                CallControlButton(
+                    title: call.isCameraEnabled ? "Cam Off" : "Cam On",
+                    systemImage: call.isCameraEnabled ? "video.fill" : "video.slash.fill",
+                    tint: call.isCameraEnabled ? .white.opacity(0.25) : .orange
+                ) {
+                    onToggleCamera()
+                }
+
+                CallControlButton(
+                    title: "Flip",
+                    systemImage: "camera.rotate",
+                    tint: .white.opacity(0.25)
+                ) {
+                    onFlipCamera()
+                }
+
+                CallControlButton(
+                    title: "End",
+                    systemImage: "phone.down.fill",
+                    tint: .red
+                ) {
+                    onEndCall()
+                }
+                .accessibilityIdentifier(TestIds.chatCallEnd)
+            }
+        case let .ended(reason):
+            VStack(spacing: 12) {
+                Text(callReasonText(reason))
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.86))
+
+                HStack(spacing: 24) {
+                    Button("Done") {
+                        onDismiss()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+
+                    Button("Start Again") {
+                        startMicAndCameraPermissionAction {
+                            onStartAgain()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .accessibilityIdentifier(TestIds.chatCallStart)
+                }
+            }
+        }
+    }
+
+    // MARK: - Shared Components
 
     private var header: some View {
         HStack {
@@ -205,6 +416,8 @@ struct CallScreenView: View {
         }
     }
 
+    // MARK: - Helpers
+
     private func syncSpeakerState() {
         let route = AVAudioSession.sharedInstance().currentRoute
         isSpeakerOn = route.outputs.contains { $0.portType == .builtInSpeaker }
@@ -216,7 +429,7 @@ struct CallScreenView: View {
             try session.overrideOutputAudioPort(isSpeakerOn ? .none : .speaker)
             syncSpeakerState()
         } catch {
-            NSLog("Failed to toggle speaker: \(error)")
+            Logger(subsystem: "chat.pika", category: "CallScreenView").error("Failed to toggle speaker: \(error.localizedDescription)")
         }
     }
     private func updateProximityMonitoring() {
@@ -241,15 +454,13 @@ struct CallScreenView: View {
         isProximityMonitoringEnabled = false
         isProximityLocked = false
     }
+
     private func startMicPermissionAction(_ action: @escaping @MainActor () -> Void) {
-        Task { @MainActor in
-            let granted = await CallMicrophonePermission.ensureGranted()
-            if granted {
-                action()
-            } else {
-                showMicDeniedAlert = true
-            }
-        }
+        CallPermissionActions.withMicPermission(onDenied: { showMicDeniedAlert = true }, action: action)
+    }
+
+    private func startMicAndCameraPermissionAction(_ action: @escaping @MainActor () -> Void) {
+        CallPermissionActions.withMicAndCameraPermission(onDenied: { showMicDeniedAlert = true }, action: action)
     }
 }
 
@@ -280,7 +491,7 @@ private struct CallControlButton: View {
 }
 
 #if DEBUG
-#Preview("Call Screen") {
+#Preview("Call Screen - Audio") {
     CallScreenView(
         call: CallState(
             callId: "preview-call",
@@ -292,12 +503,17 @@ private struct CallControlButton: View {
             shouldEnableProximityLock: true,
             startedAt: Int64(Date().timeIntervalSince1970) - 95,
             isMuted: false,
+            isVideoCall: false,
+            isCameraEnabled: false,
             debug: CallDebugStats(
                 txFrames: 1023,
                 rxFrames: 1001,
                 rxDropped: 4,
                 jitterBufferMs: 25,
-                lastRttMs: 32
+                lastRttMs: 32,
+                videoTx: 0,
+                videoRx: 0,
+                videoRxDecryptFail: 0
             )
         ),
         peerName: "Waffle",
@@ -305,6 +521,36 @@ private struct CallControlButton: View {
         onRejectCall: {},
         onEndCall: {},
         onToggleMute: {},
+        onToggleCamera: {},
+        onFlipCamera: {},
+        onStartAgain: {},
+        onDismiss: {}
+    )
+}
+
+#Preview("Call Screen - Video") {
+    CallScreenView(
+        call: CallState(
+            callId: "preview-video",
+            chatId: "chat-1",
+            peerNpub: "npub1...",
+            status: .active,
+            isLive: true,
+            shouldAutoPresentCallScreen: true,
+            shouldEnableProximityLock: false,
+            startedAt: Int64(Date().timeIntervalSince1970) - 30,
+            isMuted: false,
+            isVideoCall: true,
+            isCameraEnabled: true,
+            debug: nil
+        ),
+        peerName: "Waffle",
+        onAcceptCall: {},
+        onRejectCall: {},
+        onEndCall: {},
+        onToggleMute: {},
+        onToggleCamera: {},
+        onFlipCamera: {},
         onStartAgain: {},
         onDismiss: {}
     )

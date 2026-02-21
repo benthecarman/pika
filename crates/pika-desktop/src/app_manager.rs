@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 use flume::Sender;
-use pika_core::{AppAction, AppReconciler, AppState, AppUpdate, AuthState, FfiApp, Screen};
+use pika_core::{
+    AppAction, AppReconciler, AppState, AppUpdate, AuthState, FfiApp, Screen, VideoFrameReceiver,
+};
 
 #[derive(Clone)]
 pub struct AppManager {
@@ -185,6 +187,14 @@ impl AppManager {
         if notify {
             self.inner.notify_subscribers();
         }
+    }
+
+    pub fn set_video_frame_receiver(&self, receiver: Box<dyn VideoFrameReceiver>) {
+        self.inner.core.set_video_frame_receiver(receiver);
+    }
+
+    pub fn send_video_frame(&self, payload: Vec<u8>) {
+        self.inner.core.send_video_frame(payload);
     }
 
     pub fn reset_relay_config_to_defaults(&self) {

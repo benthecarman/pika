@@ -457,6 +457,15 @@ impl AppCore {
         this
     }
 
+    pub fn set_video_frame_receiver(
+        &mut self,
+        receiver: std::sync::Arc<
+            std::sync::RwLock<Option<std::sync::Arc<dyn crate::VideoFrameReceiver>>>,
+        >,
+    ) {
+        self.call_runtime.set_video_frame_receiver(receiver);
+    }
+
     fn archived_chats_path(&self) -> std::path::PathBuf {
         std::path::Path::new(&self.data_dir).join("archived_chats.json")
     }
@@ -2334,6 +2343,9 @@ impl AppCore {
                 rx_dropped,
                 jitter_buffer_ms,
                 last_rtt_ms,
+                video_tx,
+                video_rx,
+                video_rx_decrypt_fail,
             } => {
                 if let Some(call) = self.state.active_call.as_ref() {
                     if call.call_id == call_id {
@@ -2351,8 +2363,18 @@ impl AppCore {
                             rx_dropped,
                             jitter_buffer_ms,
                             last_rtt_ms,
+                            video_tx,
+                            video_rx,
+                            video_rx_decrypt_fail,
                         });
                         self.emit_call_state_with_previous(previous);
+                    }
+                }
+            }
+            InternalEvent::VideoFrameFromPlatform { payload } => {
+                if let Some(call) = self.state.active_call.as_ref() {
+                    if call.is_video_call && call.is_camera_enabled {
+                        self.call_runtime.send_video_frame(&call.call_id, payload);
                     }
                 }
             }
@@ -3902,11 +3924,17 @@ impl AppCore {
             AppAction::RejectCall { chat_id } => {
                 self.handle_reject_call_action(&chat_id);
             }
+            AppAction::StartVideoCall { chat_id } => {
+                self.handle_start_video_call_action(&chat_id);
+            }
             AppAction::EndCall => {
                 self.handle_end_call_action();
             }
             AppAction::ToggleMute => {
                 self.handle_toggle_mute_action();
+            }
+            AppAction::ToggleCamera => {
+                self.handle_toggle_camera_action();
             }
             AppAction::LoadOlderMessages {
                 chat_id,

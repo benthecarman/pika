@@ -72,6 +72,9 @@ pub enum AppAction {
     StartCall {
         chat_id: String,
     },
+    StartVideoCall {
+        chat_id: String,
+    },
     AcceptCall {
         chat_id: String,
     },
@@ -80,6 +83,7 @@ pub enum AppAction {
     },
     EndCall,
     ToggleMute,
+    ToggleCamera,
 
     // Group chat
     CreateGroupChat {
@@ -178,10 +182,12 @@ impl AppAction {
             AppAction::OpenChat { .. } => "OpenChat",
             AppAction::LoadOlderMessages { .. } => "LoadOlderMessages",
             AppAction::StartCall { .. } => "StartCall",
+            AppAction::StartVideoCall { .. } => "StartVideoCall",
             AppAction::AcceptCall { .. } => "AcceptCall",
             AppAction::RejectCall { .. } => "RejectCall",
             AppAction::EndCall => "EndCall",
             AppAction::ToggleMute => "ToggleMute",
+            AppAction::ToggleCamera => "ToggleCamera",
 
             // Group chat
             AppAction::CreateGroupChat { .. } => "CreateGroupChat",

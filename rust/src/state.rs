@@ -55,6 +55,8 @@ pub struct CallState {
     pub should_enable_proximity_lock: bool,
     pub started_at: Option<i64>,
     pub is_muted: bool,
+    pub is_video_call: bool,
+    pub is_camera_enabled: bool,
     pub debug: Option<CallDebugStats>,
 }
 
@@ -85,6 +87,7 @@ impl CallStatus {
 }
 
 impl CallState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         call_id: String,
         chat_id: String,
@@ -92,18 +95,26 @@ impl CallState {
         status: CallStatus,
         started_at: Option<i64>,
         is_muted: bool,
+        is_video_call: bool,
         debug: Option<CallDebugStats>,
     ) -> Self {
+        let should_enable_proximity_lock = if is_video_call {
+            false
+        } else {
+            status.should_enable_proximity_lock()
+        };
         Self {
             call_id,
             chat_id,
             peer_npub,
             is_live: status.is_live(),
             should_auto_present_call_screen: status.should_auto_present_call_screen(),
-            should_enable_proximity_lock: status.should_enable_proximity_lock(),
+            should_enable_proximity_lock,
             status,
             started_at,
             is_muted,
+            is_video_call,
+            is_camera_enabled: is_video_call,
             debug,
         }
     }
@@ -111,7 +122,11 @@ impl CallState {
     pub fn set_status(&mut self, status: CallStatus) {
         self.is_live = status.is_live();
         self.should_auto_present_call_screen = status.should_auto_present_call_screen();
-        self.should_enable_proximity_lock = status.should_enable_proximity_lock();
+        self.should_enable_proximity_lock = if self.is_video_call {
+            false
+        } else {
+            status.should_enable_proximity_lock()
+        };
         self.status = status;
     }
 }
@@ -123,6 +138,9 @@ pub struct CallDebugStats {
     pub rx_dropped: u64,
     pub jitter_buffer_ms: u32,
     pub last_rtt_ms: Option<u32>,
+    pub video_tx: u64,
+    pub video_rx: u64,
+    pub video_rx_decrypt_fail: u64,
 }
 
 /// "In flight" flags for long-ish operations that the UI should reflect.
@@ -411,6 +429,7 @@ mod tests {
             CallStatus::Offering,
             None,
             false,
+            false,
             None,
         );
         assert!(call.is_live);
@@ -433,5 +452,22 @@ mod tests {
         assert!(!call.is_live);
         assert!(!call.should_auto_present_call_screen);
         assert!(!call.should_enable_proximity_lock);
+    }
+
+    #[test]
+    fn video_call_disables_proximity_lock() {
+        let call = CallState::new(
+            "call-1".to_string(),
+            "chat-1".to_string(),
+            "npub1test".to_string(),
+            CallStatus::Active,
+            None,
+            false,
+            true,
+            None,
+        );
+        assert!(!call.should_enable_proximity_lock);
+        assert!(call.is_video_call);
+        assert!(call.is_camera_enabled);
     }
 }

@@ -164,5 +164,13 @@ pub enum InternalEvent {
         rx_dropped: u64,
         jitter_buffer_ms: u32,
         last_rtt_ms: Option<u32>,
+        video_tx: u64,
+        video_rx: u64,
+        video_rx_decrypt_fail: u64,
+    },
+
+    // Video frame sent from platform (camera capture → H.264 NALUs).
+    VideoFrameFromPlatform {
+        payload: Vec<u8>,
     },
 }

@@ -2756,6 +2756,22 @@ pub async fn daemon_main(
                             if let Some(signal) = parse_call_signal(&msg.content) {
                                 match signal {
                                     ParsedCallSignal::Invite { call_id, session } => {
+                                        // Reject video calls — marmotd only supports audio.
+                                        if session.tracks.iter().any(|t| t.name == "video0") {
+                                            tracing::info!(call_id = %call_id, "rejecting video call (unsupported)");
+                                            let _ = send_call_signal(
+                                                &client,
+                                                &relay_urls,
+                                                &mdk,
+                                                &keys,
+                                                &nostr_group_id,
+                                                &call_id,
+                                                OutgoingCallSignal::Reject { reason: "unsupported_video" },
+                                                "call_video_reject",
+                                            )
+                                            .await;
+                                            continue;
+                                        }
                                         if active_call.is_some() {
                                             let _ = send_call_signal(
                                                 &client,

@@ -85,6 +85,7 @@ impl NetworkRelay {
                         t
                     }),
                     broadcasts: HashMap::new(),
+                    broadcast_producers: HashMap::new(),
                 };
 
                 let _ = ready_tx.send(Ok(()));
@@ -225,6 +226,9 @@ struct NetworkRelayState {
     endpoint: Option<quinn::Endpoint>,
     transport: Arc<quinn::TransportConfig>,
     broadcasts: HashMap<String, BroadcastAndTrack>,
+    /// Broadcast producers keyed by broadcast_path (not track key).
+    /// Kept alive so additional tracks can be added to an existing broadcast.
+    broadcast_producers: HashMap<String, BroadcastProducer>,
 }
 
 impl NetworkRelayState {
@@ -397,17 +401,25 @@ impl NetworkRelayState {
             return bt.track.clone();
         }
 
-        let mut broadcast = BroadcastProducer::default();
         let track = Track::new(&track_addr.track_name).produce();
-        broadcast.insert_track(track.clone());
 
-        self.origin
-            .publish_broadcast(&track_addr.broadcast_path, broadcast.consume());
+        // Reuse existing broadcast for this path, or create a new one.
+        let broadcast = self
+            .broadcast_producers
+            .entry(track_addr.broadcast_path.clone())
+            .or_insert_with(|| {
+                let bp = BroadcastProducer::default();
+                self.origin
+                    .publish_broadcast(&track_addr.broadcast_path, bp.consume());
+                bp
+            });
+
+        broadcast.insert_track(track.clone());
 
         self.broadcasts.insert(
             key,
             BroadcastAndTrack {
-                _broadcast: broadcast,
+                _broadcast: broadcast.clone(),
                 track: track.clone(),
             },
         );

@@ -16,6 +16,7 @@ struct ChatView: View {
     let callEvents: [CallTimelineEvent]
     let onSendMessage: @MainActor (String, String?) -> Void
     let onStartCall: @MainActor () -> Void
+    let onStartVideoCall: @MainActor () -> Void
     let onOpenCallScreen: @MainActor () -> Void
     let onGroupInfo: (@MainActor () -> Void)?
     let onTapSender: (@MainActor (String) -> Void)?
@@ -46,6 +47,7 @@ struct ChatView: View {
         callEvents: [CallTimelineEvent],
         onSendMessage: @escaping @MainActor (String, String?) -> Void,
         onStartCall: @escaping @MainActor () -> Void,
+        onStartVideoCall: @escaping @MainActor () -> Void,
         onOpenCallScreen: @escaping @MainActor () -> Void,
         onGroupInfo: (@MainActor () -> Void)? = nil,
         onTapSender: (@MainActor (String) -> Void)? = nil,
@@ -58,6 +60,7 @@ struct ChatView: View {
         self.callEvents = callEvents
         self.onSendMessage = onSendMessage
         self.onStartCall = onStartCall
+        self.onStartVideoCall = onStartVideoCall
         self.onOpenCallScreen = onOpenCallScreen
         self.onGroupInfo = onGroupInfo
         self.onTapSender = onTapSender
@@ -130,6 +133,9 @@ struct ChatView: View {
                         hasLiveCallElsewhere: hasLiveCallElsewhere(chat: chat),
                         onStartCall: {
                             onStartCall()
+                        },
+                        onStartVideoCall: {
+                            onStartVideoCall()
                         },
                         onOpenCallScreen: {
                             onOpenCallScreen()
@@ -1830,6 +1836,7 @@ private enum ChatViewPreviewData {
             callEvents: [],
             onSendMessage: { _, _ in },
             onStartCall: {},
+            onStartVideoCall: {},
             onOpenCallScreen: {}
         )
     }
@@ -1844,6 +1851,7 @@ private enum ChatViewPreviewData {
             callEvents: [],
             onSendMessage: { _, _ in },
             onStartCall: {},
+            onStartVideoCall: {},
             onOpenCallScreen: {}
         )
     }
@@ -1858,6 +1866,7 @@ private enum ChatViewPreviewData {
             callEvents: [],
             onSendMessage: { _, _ in },
             onStartCall: {},
+            onStartVideoCall: {},
             onOpenCallScreen: {}
         )
     }
@@ -1872,6 +1881,7 @@ private enum ChatViewPreviewData {
             callEvents: [],
             onSendMessage: { _, _ in },
             onStartCall: {},
+            onStartVideoCall: {},
             onOpenCallScreen: {}
         )
     }
@@ -1886,6 +1896,7 @@ private enum ChatViewPreviewData {
             callEvents: [],
             onSendMessage: { _, _ in },
             onStartCall: {},
+            onStartVideoCall: {},
             onOpenCallScreen: {}
         )
     }

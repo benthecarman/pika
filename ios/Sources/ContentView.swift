@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var visibleToast: String? = nil
     @State private var navPath: [Screen] = []
     @State private var isCallScreenPresented = false
+    @State private var videoPipeline = VideoCallPipeline()
 
     var body: some View {
         let appState = manager.state
@@ -72,9 +73,11 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: visibleToast)
         .onAppear {
+            videoPipeline.configure(core: manager.core)
             if let call = manager.state.activeCall, call.shouldAutoPresentCallScreen {
                 isCallScreenPresented = true
             }
+            videoPipeline.syncWithCallState(manager.state.activeCall)
         }
         .onChange(of: manager.state.toast) { _, new in
             guard let message = new else { return }
@@ -95,6 +98,8 @@ struct ContentView: View {
             AppDelegate.activeChatId = newChatId
         }
         .onChange(of: manager.state.activeCall) { old, new in
+            videoPipeline.syncWithCallState(new)
+
             guard let new else {
                 isCallScreenPresented = false
                 // Clear call notifications when the call ends/is rejected.
@@ -113,6 +118,9 @@ struct ContentView: View {
         }
         .fullScreenCover(isPresented: $isCallScreenPresented) {
             callScreenOverlay(state: manager.state)
+                .overlay(alignment: .top) {
+                    toastOverlay
+                }
         }
     }
 
@@ -159,13 +167,25 @@ struct ContentView: View {
                 onToggleMute: {
                     manager.dispatch(.toggleMute)
                 },
+                onToggleCamera: {
+                    manager.dispatch(.toggleCamera)
+                },
+                onFlipCamera: {
+                    videoPipeline.switchCamera()
+                },
                 onStartAgain: {
                     manager.dispatch(.openChat(chatId: call.chatId))
-                    manager.dispatch(.startCall(chatId: call.chatId))
+                    if call.isVideoCall {
+                        manager.dispatch(.startVideoCall(chatId: call.chatId))
+                    } else {
+                        manager.dispatch(.startCall(chatId: call.chatId))
+                    }
                 },
                 onDismiss: {
                     isCallScreenPresented = false
-                }
+                },
+                remotePixelBuffer: videoPipeline.remotePixelBuffer,
+                localCaptureSession: videoPipeline.localCaptureSession
             )
         }
     }
@@ -240,6 +260,7 @@ private func screenView(
                 )
             },
             onStartCall: { manager.dispatch(.startCall(chatId: chatId)) },
+            onStartVideoCall: { manager.dispatch(.startVideoCall(chatId: chatId)) },
             onOpenCallScreen: {
                 onOpenCallScreen()
             },

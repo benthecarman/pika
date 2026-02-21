@@ -26,6 +26,7 @@ pub enum PushNotificationResult {
         call_id: String,
         caller_name: String,
         caller_picture_url: Option<String>,
+        is_video: bool,
     },
     /// Recognised but should not alert (self-message, call signal, etc.).
     Suppress,
@@ -36,6 +37,19 @@ struct CallProbe {
     #[serde(rename = "type")]
     msg_type: String,
     call_id: String,
+    #[serde(default)]
+    body: Option<CallProbeBody>,
+}
+
+#[derive(serde::Deserialize)]
+struct CallProbeBody {
+    #[serde(default)]
+    tracks: Vec<CallProbeTrack>,
+}
+
+#[derive(serde::Deserialize)]
+struct CallProbeTrack {
+    name: String,
 }
 
 #[uniffi::export]
@@ -127,6 +141,11 @@ pub fn decrypt_push_notification(
             if probe.msg_type != "call.invite" {
                 return Some(PushNotificationResult::Suppress);
             }
+            let is_video = probe
+                .body
+                .as_ref()
+                .map(|b| b.tracks.iter().any(|t| t.name == "video0"))
+                .unwrap_or(false);
             let sender_hex = msg.pubkey.to_hex();
             let (caller_name, caller_picture_url) = resolve_sender_profile(&data_dir, &sender_hex);
             Some(PushNotificationResult::CallInvite {
@@ -134,6 +153,7 @@ pub fn decrypt_push_notification(
                 call_id: probe.call_id,
                 caller_name,
                 caller_picture_url,
+                is_video,
             })
         }
         _ => Some(PushNotificationResult::Suppress),

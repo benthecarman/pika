@@ -35,6 +35,8 @@ func callReasonText(_ reason: String) -> String {
         return "Serialize failed"
     case "unsupported_group":
         return "Unsupported group"
+    case "unsupported_video":
+        return "Video calls not supported"
     default:
         return reason.replacingOccurrences(of: "_", with: " ").capitalized
     }
@@ -62,6 +64,13 @@ func callDurationText(startedAt: Int64?, nowSeconds: Int64 = Int64(Date().timeIn
 }
 
 func formattedCallDebugStats(_ debug: CallDebugStats) -> String {
-    "tx \(debug.txFrames)  rx \(debug.rxFrames)  drop \(debug.rxDropped)"
+    var s = "tx \(debug.txFrames)  rx \(debug.rxFrames)  drop \(debug.rxDropped)"
+    if debug.videoTx > 0 || debug.videoRx > 0 {
+        s += "  vtx \(debug.videoTx)  vrx \(debug.videoRx)"
+        if debug.videoRxDecryptFail > 0 {
+            s += "  vfail \(debug.videoRxDecryptFail)"
+        }
+    }
+    return s
 }
 

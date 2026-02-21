@@ -30,6 +30,16 @@ impl CallTrackSpec {
             frame_ms: 20,
         }
     }
+
+    fn video0_h264_default() -> Self {
+        Self {
+            name: "video0".to_string(),
+            codec: "h264".to_string(),
+            sample_rate: 90_000,
+            channels: 0,
+            frame_ms: 33,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,7 +232,11 @@ impl AppCore {
             .unwrap_or(false)
     }
 
-    fn call_session_from_config(&self, call_id: &str) -> Option<CallSessionParams> {
+    fn call_session_from_config(
+        &self,
+        call_id: &str,
+        include_video: bool,
+    ) -> Option<CallSessionParams> {
         let moq_url = self
             .config
             .call_moq_url
@@ -243,11 +257,16 @@ impl AppCore {
             return None;
         }
 
+        let mut tracks = vec![CallTrackSpec::audio0_opus_default()];
+        if include_video {
+            tracks.push(CallTrackSpec::video0_h264_default());
+        }
+
         Some(CallSessionParams {
             moq_url,
             broadcast_base: format!("{prefix}/{call_id}"),
             relay_auth: String::new(),
-            tracks: vec![CallTrackSpec::audio0_opus_default()],
+            tracks,
         })
     }
 
@@ -269,14 +288,15 @@ impl AppCore {
         self.session.as_ref().map(|s| s.pubkey.to_hex())
     }
 
-    fn derive_mls_media_crypto_context(
+    fn derive_track_keys(
         &self,
         chat_id: &str,
         call_id: &str,
         session: &CallSessionParams,
         local_pubkey_hex: &str,
         peer_pubkey_hex: &str,
-    ) -> Result<super::call_runtime::CallMediaCryptoContext, String> {
+        track: &str,
+    ) -> Result<(FrameKeyMaterial, FrameKeyMaterial, [u8; 32]), String> {
         let sess = self
             .session
             .as_ref()
@@ -292,9 +312,8 @@ impl AppCore {
             .ok_or_else(|| "mls group not found".to_string())?;
 
         let shared_seed = call_shared_seed(call_id, session, local_pubkey_hex, peer_pubkey_hex);
-
-        let track = "audio0";
         let generation = 0u8;
+
         let tx_hash = context_hash(&[
             b"pika.call.media.base.v1",
             shared_seed.as_bytes(),
@@ -325,7 +344,7 @@ impl AppCore {
             "application/pika-call",
             &tx_filename,
         )
-        .map_err(|e| format!("derive tx media key failed: {e}"))?;
+        .map_err(|e| format!("derive tx media key for {track} failed: {e}"))?;
 
         let rx_base = *derive_encryption_key(
             &sess.mdk,
@@ -335,7 +354,7 @@ impl AppCore {
             "application/pika-call",
             &rx_filename,
         )
-        .map_err(|e| format!("derive rx media key failed: {e}"))?;
+        .map_err(|e| format!("derive rx media key for {track} failed: {e}"))?;
 
         let group_root = *derive_encryption_key(
             &sess.mdk,
@@ -345,7 +364,7 @@ impl AppCore {
             "application/pika-call",
             &root_filename,
         )
-        .map_err(|e| format!("derive media group root failed: {e}"))?;
+        .map_err(|e| format!("derive media group root for {track} failed: {e}"))?;
 
         let tx_keys = FrameKeyMaterial::from_base_key(
             tx_base,
@@ -364,9 +383,46 @@ impl AppCore {
             group_root,
         );
 
+        Ok((tx_keys, rx_keys, group_root))
+    }
+
+    fn derive_mls_media_crypto_context(
+        &self,
+        chat_id: &str,
+        call_id: &str,
+        session: &CallSessionParams,
+        local_pubkey_hex: &str,
+        peer_pubkey_hex: &str,
+    ) -> Result<super::call_runtime::CallMediaCryptoContext, String> {
+        let (tx_keys, rx_keys, group_root) = self.derive_track_keys(
+            chat_id,
+            call_id,
+            session,
+            local_pubkey_hex,
+            peer_pubkey_hex,
+            "audio0",
+        )?;
+
+        let has_video = session.tracks.iter().any(|t| t.name == "video0");
+        let (video_tx_keys, video_rx_keys) = if has_video {
+            let (vtx, vrx, _) = self.derive_track_keys(
+                chat_id,
+                call_id,
+                session,
+                local_pubkey_hex,
+                peer_pubkey_hex,
+                "video0",
+            )?;
+            (Some(vtx), Some(vrx))
+        } else {
+            (None, None)
+        };
+
         Ok(super::call_runtime::CallMediaCryptoContext {
             tx_keys,
             rx_keys,
+            video_tx_keys,
+            video_rx_keys,
             local_participant_label: opaque_participant_label(
                 &group_root,
                 local_pubkey_hex.as_bytes(),
@@ -564,6 +620,14 @@ impl AppCore {
     }
 
     pub(super) fn handle_start_call_action(&mut self, chat_id: &str) {
+        self.start_call_internal(chat_id, false);
+    }
+
+    pub(super) fn handle_start_video_call_action(&mut self, chat_id: &str) {
+        self.start_call_internal(chat_id, true);
+    }
+
+    fn start_call_internal(&mut self, chat_id: &str, is_video_call: bool) {
         if !self.is_logged_in() {
             self.toast("Please log in first");
             return;
@@ -583,7 +647,7 @@ impl AppCore {
             self.toast("Chat peer not found");
             return;
         };
-        let Some(mut session) = self.call_session_from_config(&call_id) else {
+        let Some(mut session) = self.call_session_from_config(&call_id, is_video_call) else {
             self.toast("Call config missing: set `call_moq_url` in pika_config.json");
             return;
         };
@@ -597,11 +661,12 @@ impl AppCore {
                 CallStatus::Offering,
                 None,
                 false,
+                is_video_call,
                 None,
             ));
             self.call_session_params = Some(session);
             self.emit_call_state_with_previous(previous);
-            tracing::info!(call_id = %call_id, "call_start_offline");
+            tracing::info!(call_id = %call_id, is_video_call, "call_start_offline");
             return;
         }
 
@@ -638,6 +703,7 @@ impl AppCore {
             CallStatus::Offering,
             None,
             false,
+            is_video_call,
             None,
         ));
         self.call_session_params = Some(session.clone());
@@ -824,6 +890,25 @@ impl AppCore {
         self.emit_call_state();
     }
 
+    pub(super) fn handle_toggle_camera_action(&mut self) {
+        let Some(call) = self.state.active_call.as_mut() else {
+            return;
+        };
+        if !call.is_video_call {
+            return;
+        }
+        if !matches!(
+            call.status,
+            CallStatus::Offering | CallStatus::Connecting | CallStatus::Active
+        ) {
+            return;
+        }
+        call.is_camera_enabled = !call.is_camera_enabled;
+        self.call_runtime
+            .set_camera_enabled(&call.call_id, call.is_camera_enabled);
+        self.emit_call_state();
+    }
+
     fn send_call_reject(&mut self, chat_id: &str, call_id: &str, reason: &str) {
         let payload = match build_call_signal_json(call_id, OutgoingCallSignal::Reject { reason }) {
             Ok(v) => v,
@@ -882,6 +967,7 @@ impl AppCore {
                     self.send_call_reject(chat_id, &call_id, "auth_failed");
                     return;
                 }
+                let is_video_call = session.tracks.iter().any(|t| t.name == "video0");
                 self.call_session_params = Some(session);
                 let previous = self.state.active_call.clone();
                 self.state.active_call = Some(crate::state::CallState::new(
@@ -891,6 +977,7 @@ impl AppCore {
                     CallStatus::Ringing,
                     None,
                     false,
+                    is_video_call,
                     None,
                 ));
                 self.emit_call_state_with_previous(previous);

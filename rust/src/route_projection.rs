@@ -282,6 +282,7 @@ mod tests {
             CallStatus::Active,
             None,
             false,
+            false,
             None,
         ));
         let route = project_desktop(&state);

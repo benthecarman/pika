@@ -5,8 +5,9 @@ use crate::theme;
 use crate::Message;
 
 /// Full-width incoming-call banner shown at the top of the window.
-pub fn incoming_call_banner(peer_name: &str) -> Element<'_, Message, Theme> {
-    let label = format!("\u{260e} Incoming call from {peer_name}");
+pub fn incoming_call_banner(peer_name: &str, is_video_call: bool) -> Element<'_, Message, Theme> {
+    let call_type = if is_video_call { "video call" } else { "call" };
+    let label = format!("\u{260e} Incoming {call_type} from {peer_name}");
 
     let row = row![
         text(label).color(iced::Color::WHITE).width(Fill),

@@ -1,5 +1,7 @@
 mod app_manager;
 mod theme;
+mod video;
+mod video_shader;
 mod views;
 
 use app_manager::AppManager;
@@ -84,6 +86,8 @@ struct DesktopApp {
     hovered_message_id: Option<String>,
     // Calling
     show_call_screen: bool,
+    // Video
+    video_pipeline: video::DesktopVideoPipeline,
 }
 
 #[derive(Debug, Clone)]
@@ -138,13 +142,16 @@ pub enum Message {
     UnhoverMessage,
     // Calling
     StartCall,
+    StartVideoCall,
     AcceptCall,
     RejectCall,
     EndCall,
     ToggleMute,
+    ToggleCamera,
     OpenCallScreen,
     DismissCallScreen,
     CallTimerTick,
+    VideoFrameTick,
 }
 
 impl DesktopApp {
@@ -181,15 +188,28 @@ impl DesktopApp {
                 iced::time::every(Duration::from_secs(30)).map(|_| Message::RelativeTimeTick);
 
             let mut subs = vec![core_updates, relative_time_ticks];
-            if self.show_call_screen
-                && self
-                    .state
-                    .active_call
-                    .as_ref()
-                    .is_some_and(|c| matches!(c.status, CallStatus::Active))
-            {
+            let is_active_call = self
+                .state
+                .active_call
+                .as_ref()
+                .is_some_and(|c| matches!(c.status, CallStatus::Active));
+            let is_video_call = self
+                .state
+                .active_call
+                .as_ref()
+                .is_some_and(|c| c.is_video_call);
+
+            if self.show_call_screen && is_active_call {
                 subs.push(
                     iced::time::every(Duration::from_secs(1)).map(|_| Message::CallTimerTick),
+                );
+            }
+            // Poll for new video frames at ~30fps during video calls.
+            // The decoder runs at full speed; this just controls how often
+            // iced picks up the latest frame for display.
+            if is_video_call && is_active_call {
+                subs.push(
+                    iced::time::every(Duration::from_millis(33)).map(|_| Message::VideoFrameTick),
                 );
             }
             Subscription::batch(subs)
@@ -516,6 +536,16 @@ impl DesktopApp {
                 }
                 self.show_call_screen = true;
             }
+            Message::StartVideoCall => {
+                if let Some(chat) = &self.state.current_chat {
+                    if let Some(manager) = &self.manager {
+                        manager.dispatch(AppAction::StartVideoCall {
+                            chat_id: chat.chat_id.clone(),
+                        });
+                    }
+                }
+                self.show_call_screen = true;
+            }
             Message::AcceptCall => {
                 if let Some(call) = &self.state.active_call {
                     if let Some(manager) = &self.manager {
@@ -546,6 +576,11 @@ impl DesktopApp {
                     manager.dispatch(AppAction::ToggleMute);
                 }
             }
+            Message::ToggleCamera => {
+                if let Some(manager) = &self.manager {
+                    manager.dispatch(AppAction::ToggleCamera);
+                }
+            }
             Message::OpenCallScreen => {
                 self.show_call_screen = true;
             }
@@ -554,6 +589,10 @@ impl DesktopApp {
             }
             Message::CallTimerTick => {
                 // No-op: triggers a re-render so the duration display updates.
+            }
+            Message::VideoFrameTick => {
+                // Check for stale remote video and trigger re-render for new frames.
+                self.video_pipeline.check_staleness();
             }
         }
 
@@ -620,7 +659,10 @@ impl DesktopApp {
                     .and_then(|c| c.members.first())
                     .and_then(|m| m.name.as_deref())
                     .unwrap_or("Unknown");
-                main_column = main_column.push(views::call_banner::incoming_call_banner(peer_name));
+                main_column = main_column.push(views::call_banner::incoming_call_banner(
+                    peer_name,
+                    call.is_video_call,
+                ));
             }
         }
 
@@ -702,7 +744,7 @@ impl DesktopApp {
                 .and_then(|c| c.members.first())
                 .and_then(|m| m.name.as_deref())
                 .unwrap_or("Unknown");
-            views::call_screen::call_screen_view(call, peer_name)
+            views::call_screen::call_screen_view(call, peer_name, &self.video_pipeline)
         } else if route.selected_chat_id.is_some() {
             if let Some(chat) = &self.state.current_chat {
                 let replying_to = self.reply_to_message_id.as_ref().and_then(|reply_id| {
@@ -768,11 +810,12 @@ impl DesktopApp {
             emoji_picker_message_id: None,
             hovered_message_id: None,
             show_call_screen: false,
+            video_pipeline: video::DesktopVideoPipeline::new(),
         }
     }
 
     fn sync_from_manager(&mut self) {
-        let Some(manager) = &self.manager else {
+        let Some(manager) = self.manager.clone() else {
             return;
         };
 
@@ -827,6 +870,10 @@ impl DesktopApp {
             if had_call && !has_call {
                 self.show_call_screen = false;
             }
+
+            // Sync video pipeline with call state.
+            self.video_pipeline
+                .sync_with_call(latest.active_call.as_ref(), &manager);
 
             self.state = latest;
             if let Some(reply_id) = self.reply_to_message_id.as_ref() {
