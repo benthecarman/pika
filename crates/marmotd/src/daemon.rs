@@ -1794,6 +1794,35 @@ async fn stdout_writer(mut rx: mpsc::UnboundedReceiver<OutMsg>) -> anyhow::Resul
     Ok(())
 }
 
+/// Forward OutMsg to a child process channel (used in --exec mode).
+async fn forward_writer(
+    mut rx: mpsc::UnboundedReceiver<OutMsg>,
+    child_tx: mpsc::UnboundedSender<OutMsg>,
+) -> anyhow::Result<()> {
+    while let Some(msg) = rx.recv().await {
+        // Log to stderr for debugging
+        let line = serde_json::to_string(&msg).context("encode out msg")?;
+        eprintln!("[marmotd] -> child: {line}");
+        child_tx.send(msg).ok();
+    }
+    Ok(())
+}
+
+/// Write OutMsg JSONL to a child process's stdin.
+async fn child_stdin_writer(
+    mut rx: mpsc::UnboundedReceiver<OutMsg>,
+    mut stdin: tokio::process::ChildStdin,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    while let Some(msg) = rx.recv().await {
+        let line = serde_json::to_string(&msg).context("encode out msg")?;
+        stdin.write_all(line.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+        stdin.flush().await?;
+    }
+    Ok(())
+}
+
 fn parse_relay_list(relay: &str, relays_override: &[String]) -> anyhow::Result<Vec<RelayUrl>> {
     let mut out = Vec::new();
     if relays_override.is_empty() {
@@ -1836,6 +1865,8 @@ pub async fn daemon_main(
     state_dir: &Path,
     giftwrap_lookback_sec: u64,
     allow_pubkeys: &[String],
+    auto_accept_welcomes: bool,
+    exec_cmd: Option<&str>,
 ) -> anyhow::Result<()> {
     crate::ensure_dir(state_dir).context("create state dir")?;
 
@@ -1856,11 +1887,30 @@ pub async fn daemon_main(
         .unwrap_or_else(|_| "<npub_err>".to_string());
 
     let (out_tx, out_rx) = mpsc::unbounded_channel::<OutMsg>();
-    tokio::spawn(async move {
-        if let Err(err) = stdout_writer(out_rx).await {
-            eprintln!("[marmotd] stdout writer failed: {err:#}");
-        }
-    });
+
+    // When --exec is set, we also send a copy of OutMsg to the child's stdin.
+    // The "real" stdout still gets the JSONL (for logging / OpenClaw compat).
+    let (child_out_tx, child_out_rx) = mpsc::unbounded_channel::<OutMsg>();
+    let has_exec = exec_cmd.is_some();
+
+    // stdout writer: always write to real stdout
+    {
+        let out_rx_for_stdout = out_rx;
+        let child_out_tx = child_out_tx.clone();
+        tokio::spawn(async move {
+            if has_exec {
+                // With --exec: forward to child, suppress real stdout (child owns the conversation)
+                if let Err(err) = forward_writer(out_rx_for_stdout, child_out_tx).await {
+                    eprintln!("[marmotd] forward writer failed: {err:#}");
+                }
+            } else {
+                // Without --exec: write to real stdout as before
+                if let Err(err) = stdout_writer(out_rx_for_stdout).await {
+                    eprintln!("[marmotd] stdout writer failed: {err:#}");
+                }
+            }
+        });
+    }
 
     // Build pubkey allowlist. Empty = open (allow all).
     let allowlist: HashSet<String> = allow_pubkeys
@@ -1948,26 +1998,82 @@ pub async fn daemon_main(
         }
     }
 
-    // stdin command reader
+    // command reader (stdin or child process stdout)
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<InCmd>();
-    tokio::spawn(async move {
-        let stdin = tokio::io::stdin();
-        let mut lines = tokio::io::BufReader::new(stdin).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
+    let cmd_tx_for_auto = cmd_tx.clone();
+
+    if let Some(exec_cmd) = exec_cmd {
+        // --exec mode: spawn child, pipe OutMsg to its stdin, read InCmd from its stdout
+        eprintln!("[marmotd] exec mode: spawning child: {exec_cmd}");
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(exec_cmd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .context("spawn --exec child")?;
+
+        let child_stdin = child.stdin.take().context("child stdin")?;
+        let child_stdout = child.stdout.take().context("child stdout")?;
+
+        // Write OutMsg JSONL to child's stdin
+        tokio::spawn(async move {
+            if let Err(err) = child_stdin_writer(child_out_rx, child_stdin).await {
+                eprintln!("[marmotd] child stdin writer failed: {err:#}");
             }
-            match serde_json::from_str::<InCmd>(trimmed) {
-                Ok(cmd) => {
-                    cmd_tx.send(cmd).ok();
+        });
+
+        // Read InCmd JSONL from child's stdout
+        let cmd_tx_clone = cmd_tx.clone();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(child_stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
                 }
-                Err(err) => {
-                    eprintln!("[marmotd] invalid cmd json: {err} line={trimmed}");
+                match serde_json::from_str::<InCmd>(trimmed) {
+                    Ok(cmd) => {
+                        cmd_tx_clone.send(cmd).ok();
+                    }
+                    Err(err) => {
+                        eprintln!("[marmotd] invalid cmd from child: {err} line={trimmed}");
+                    }
                 }
             }
-        }
-    });
+            eprintln!("[marmotd] child stdout closed");
+        });
+
+        // Wait for child to exit in background
+        tokio::spawn(async move {
+            match child.wait().await {
+                Ok(status) => eprintln!("[marmotd] child exited: {status}"),
+                Err(err) => eprintln!("[marmotd] child wait failed: {err:#}"),
+            }
+        });
+    } else {
+        // Normal mode: read from real stdin
+        drop(child_out_rx); // not used
+        tokio::spawn(async move {
+            let stdin = tokio::io::stdin();
+            let mut lines = tokio::io::BufReader::new(stdin).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<InCmd>(trimmed) {
+                    Ok(cmd) => {
+                        cmd_tx.send(cmd).ok();
+                    }
+                    Err(err) => {
+                        eprintln!("[marmotd] invalid cmd json: {err} line={trimmed}");
+                    }
+                }
+            }
+        });
+    }
 
     let mut shutdown = false;
     while !shutdown {
@@ -2857,13 +2963,24 @@ pub async fn daemon_main(
                         None => ("".to_string(), "".to_string()),
                     };
 
+                    let wid_hex = wrapper_event_id.to_hex();
                     out_tx.send(OutMsg::WelcomeReceived {
-                        wrapper_event_id: wrapper_event_id.to_hex(),
+                        wrapper_event_id: wid_hex.clone(),
                         welcome_event_id: rumor.id().to_hex(),
                         from_pubkey: from.to_hex().to_lowercase(),
                         nostr_group_id,
                         group_name,
                     }).ok();
+
+                    if auto_accept_welcomes {
+                        eprintln!("[marmotd] auto-accepting welcome wrapper_id={wid_hex}");
+                        cmd_tx_for_auto
+                            .send(InCmd::AcceptWelcome {
+                                request_id: Some("auto-accept".into()),
+                                wrapper_event_id: wid_hex,
+                            })
+                            .ok();
+                    }
 
                     continue;
                 }

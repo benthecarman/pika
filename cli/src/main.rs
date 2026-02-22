@@ -1,6 +1,9 @@
+mod fly_machines;
 mod mdk_util;
 mod relay_util;
 
+use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,6 +15,7 @@ use nostr_blossom::client::BlossomClient;
 use nostr_sdk::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncBufReadExt;
 
 // Same defaults as the Pika app (rust/src/core/config.rs).
 const DEFAULT_RELAY_URLS: &[&str] = &[
@@ -222,6 +226,22 @@ If --output is omitted, the original filename from the sender is used.")]
         #[arg(long, default_value_t = 86400)]
         lookback: u64,
     },
+
+    /// Manage AI agents on Fly.io
+    Agent {
+        #[command(subcommand)]
+        cmd: AgentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommand {
+    /// Create a new pi agent on Fly.io and start chatting
+    New {
+        /// Machine name (default: agent-<random>)
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -278,6 +298,9 @@ async fn main() -> anyhow::Result<()> {
             cmd_update_profile(&cli, name.as_deref(), picture.as_deref()).await
         }
         Command::Listen { timeout, lookback } => cmd_listen(&cli, *timeout, *lookback).await,
+        Command::Agent { cmd } => match cmd {
+            AgentCommand::New { name } => cmd_agent_new(&cli, name.as_deref()).await,
+        },
     }
 }
 
@@ -1064,6 +1087,179 @@ async fn cmd_download_media(
         "output_path": resolved_output,
         "bytes": decrypted.len(),
     }));
+    Ok(())
+}
+
+async fn cmd_agent_new(cli: &Cli, name: Option<&str>) -> anyhow::Result<()> {
+    let fly = fly_machines::FlyClient::from_env()?;
+    let anthropic_key =
+        std::env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY must be set")?;
+
+    let (keys, mdk) = open(cli)?;
+    eprintln!("Your pubkey: {}", keys.public_key().to_hex());
+
+    let bot_keys = Keys::generate();
+    let bot_pubkey = bot_keys.public_key();
+    let bot_secret_hex = bot_keys.secret_key().to_secret_hex();
+    eprintln!("Bot pubkey: {}", bot_pubkey.to_hex());
+
+    let suffix = format!("{:08x}", rand::random::<u32>());
+    let volume_name = format!("agent_{suffix}");
+    let machine_name = name
+        .map(std::string::ToString::to_string)
+        .unwrap_or_else(|| format!("agent-{suffix}"));
+
+    eprint!("Creating Fly volume...");
+    std::io::stderr().flush().ok();
+    let volume = fly.create_volume(&volume_name).await?;
+    eprintln!(" done ({})", volume.id);
+
+    let mut env = HashMap::new();
+    env.insert("STATE_DIR".to_string(), "/app/state".to_string());
+    env.insert("NOSTR_SECRET_KEY".to_string(), bot_secret_hex);
+    env.insert("ANTHROPIC_API_KEY".to_string(), anthropic_key);
+
+    eprint!("Creating Fly machine...");
+    std::io::stderr().flush().ok();
+    let machine = fly.create_machine(&machine_name, &volume.id, env).await?;
+    eprintln!(" done ({})", machine.id);
+
+    let client = client_all(cli, &keys).await?;
+    let relays = relay_util::parse_relay_urls(&resolve_relays(cli))?;
+
+    eprint!("Waiting for bot to publish key package");
+    std::io::stderr().flush().ok();
+    let start = tokio::time::Instant::now();
+    let timeout = Duration::from_secs(120);
+    let bot_kp = loop {
+        match relay_util::fetch_latest_key_package(
+            &client,
+            &bot_pubkey,
+            &relays,
+            Duration::from_secs(5),
+        )
+        .await
+        {
+            Ok(kp) => break kp,
+            Err(err) => {
+                if start.elapsed() >= timeout {
+                    client.shutdown().await;
+                    anyhow::bail!(
+                        "timed out waiting for bot key package after {}s: {err}",
+                        timeout.as_secs()
+                    );
+                }
+                eprint!(".");
+                std::io::stderr().flush().ok();
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+        }
+    };
+    eprintln!(" done");
+
+    eprint!("Creating MLS group and inviting bot...");
+    std::io::stderr().flush().ok();
+    let config = NostrGroupConfigData::new(
+        "Agent Chat".to_string(),
+        String::new(),
+        None,
+        None,
+        None,
+        relays.clone(),
+        vec![keys.public_key(), bot_pubkey],
+    );
+    let result = mdk
+        .create_group(&keys.public_key(), vec![bot_kp], config)
+        .context("create group for bot")?;
+    let mls_group_id = result.group.mls_group_id.clone();
+    let nostr_group_id_hex = hex::encode(result.group.nostr_group_id);
+
+    for rumor in result.welcome_rumors {
+        let giftwrap = EventBuilder::gift_wrap(&keys, &bot_pubkey, rumor, [])
+            .await
+            .context("build welcome giftwrap")?;
+        relay_util::publish_and_confirm(&client, &relays, &giftwrap, "welcome").await?;
+    }
+    eprintln!(" done");
+
+    let group_filter = Filter::new()
+        .kind(Kind::MlsGroupMessage)
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), &nostr_group_id_hex)
+        .since(Timestamp::now());
+    let sub = client.subscribe(group_filter, None).await?;
+    let mut rx = client.notifications();
+
+    let bot_npub = bot_pubkey
+        .to_bech32()
+        .unwrap_or_else(|_| bot_pubkey.to_hex().to_string());
+    eprintln!();
+    eprintln!("Connected to pi agent ({bot_npub})");
+    eprintln!("Type messages below. Ctrl-C to exit.");
+    eprintln!();
+
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    eprint!("you> ");
+    std::io::stderr().flush().ok();
+
+    loop {
+        tokio::select! {
+            line = stdin.next_line() => {
+                let Some(line) = line? else { break };
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    eprint!("you> ");
+                    std::io::stderr().flush().ok();
+                    continue;
+                }
+
+                let rumor = EventBuilder::new(Kind::ChatMessage, &line).build(keys.public_key());
+                let msg_event = mdk.create_message(&mls_group_id, rumor).context("create chat message")?;
+                relay_util::publish_and_confirm(&client, &relays, &msg_event, "chat").await?;
+                eprint!("you> ");
+                std::io::stderr().flush().ok();
+            }
+            notification = rx.recv() => {
+                let notification = match notification {
+                    Ok(n) => n,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                };
+                let RelayPoolNotification::Event { subscription_id, event, .. } = notification else { continue };
+                if subscription_id != sub.val {
+                    continue;
+                }
+                let event = *event;
+                if event.kind != Kind::MlsGroupMessage {
+                    continue;
+                }
+                if let Ok(MessageProcessingResult::ApplicationMessage(msg)) =
+                    mdk.process_message(&event)
+                {
+                    if msg.pubkey == bot_pubkey {
+                        eprint!("\r");
+                        println!("pi> {}", msg.content);
+                        println!();
+                        eprint!("you> ");
+                        std::io::stderr().flush().ok();
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
+        }
+    }
+
+    client.unsubscribe_all().await;
+    client.shutdown().await;
+
+    eprintln!();
+    eprintln!("Machine {} is still running.", machine.id);
+    eprintln!(
+        "Stop with: fly machine stop {} -a {}",
+        machine.id,
+        fly.app_name()
+    );
     Ok(())
 }
 

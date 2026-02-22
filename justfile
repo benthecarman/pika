@@ -714,3 +714,15 @@ cli-smoke:
 # Starts its own relay automatically. Requires internet for the default Blossom server.
 cli-smoke-media:
     ./tools/cli-smoke --with-media
+
+# Run `pika-cli agent new` (loads FLY_API_TOKEN + ANTHROPIC_API_KEY from .env).
+agent RELAY_EU="wss://eu.nostr.pikachat.org" RELAY_US="wss://us-east.nostr.pikachat.org":
+    set -euo pipefail; \
+    if [ ! -f .env ]; then \
+      echo "error: missing .env in repo root"; \
+      exit 1; \
+    fi; \
+    set -a; \
+    source .env; \
+    set +a; \
+    cargo run -p pika-cli -- --relay {{ RELAY_EU }} --relay {{ RELAY_US }} agent new

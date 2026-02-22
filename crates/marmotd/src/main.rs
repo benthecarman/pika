@@ -91,6 +91,17 @@ enum Command {
         /// If empty, all pubkeys are allowed (open mode).
         #[arg(long)]
         allow_pubkey: Vec<String>,
+
+        /// Automatically accept incoming MLS welcomes (group invitations).
+        #[arg(long, default_value_t = false)]
+        auto_accept_welcomes: bool,
+
+        /// Spawn a child process and bridge its stdio to the marmotd JSONL protocol.
+        /// marmotd OutMsg lines are written to the child's stdin; the child's stdout
+        /// lines are parsed as marmotd InCmd and executed. This turns marmotd into a
+        /// self-contained bot runtime.
+        #[arg(long)]
+        exec: Option<String>,
     },
 }
 
@@ -283,9 +294,18 @@ async fn main() -> anyhow::Result<()> {
             state_dir,
             giftwrap_lookback_sec,
             allow_pubkey,
-        } => daemon::daemon_main(&relay, &state_dir, giftwrap_lookback_sec, &allow_pubkey)
-            .await
-            .context("daemon failed"),
+            auto_accept_welcomes,
+            exec,
+        } => daemon::daemon_main(
+            &relay,
+            &state_dir,
+            giftwrap_lookback_sec,
+            &allow_pubkey,
+            auto_accept_welcomes,
+            exec.as_deref(),
+        )
+        .await
+        .context("daemon failed"),
     }
 }
 
