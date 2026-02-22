@@ -1798,6 +1798,8 @@ fn init_identity(nsec: &str, state_dir: &Path) -> anyhow::Result<()> {
     let identity_path = state_dir.join("identity.json");
     let db_path = state_dir.join("mdk.sqlite");
 
+    let mut warnings: Vec<String> = Vec::new();
+
     if let Ok(raw) = std::fs::read_to_string(&identity_path)
         && let Ok(existing) = serde_json::from_str::<IdentityFile>(&raw)
     {
@@ -1806,19 +1808,34 @@ fn init_identity(nsec: &str, state_dir: &Path) -> anyhow::Result<()> {
             info!("pubkey={new_pubkey_hex}");
             return Ok(());
         }
-        warn!(
+        warnings.push(format!(
             "identity.json exists with a DIFFERENT pubkey (existing={}, new={})",
             existing.public_key_hex.to_lowercase(),
             new_pubkey_hex
-        );
+        ));
     }
 
     if db_path.exists() {
-        warn!(
+        warnings.push(format!(
             "mdk.sqlite exists at {}; it may contain MLS state from a previous identity. \
              Consider removing it if you are switching keys.",
             db_path.display()
-        );
+        ));
+    }
+
+    if !warnings.is_empty() {
+        for w in &warnings {
+            warn!("{w}");
+        }
+        eprint!("Continue anyway? (yes/abort): ");
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .context("read stdin")?;
+        let input = input.trim().to_lowercase();
+        if input != "yes" {
+            anyhow::bail!("aborted by user");
+        }
     }
 
     let f = IdentityFile {
