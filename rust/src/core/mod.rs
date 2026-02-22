@@ -2995,6 +2995,18 @@ impl AppCore {
                     (None, None) => a.npub.cmp(&b.npub),
                 });
                 self.state.follow_list = follow_list;
+                // Persist to cache (guard against empty relay responses wiping the DB).
+                if self.state.follow_list.len() >= 2 {
+                    if let Some(conn) = self.profile_db.as_ref() {
+                        let pubkeys: Vec<String> = self
+                            .state
+                            .follow_list
+                            .iter()
+                            .map(|f| f.pubkey.clone())
+                            .collect();
+                        profile_db::save_follows(conn, &pubkeys);
+                    }
+                }
                 self.set_busy(|b| b.fetching_follow_list = false);
                 // Update peer_profile.is_followed if the sheet is open.
                 if let Some(ref mut pp) = self.state.peer_profile {
@@ -3099,6 +3111,14 @@ impl AppCore {
                 }
             }
             InternalEvent::ContactListModifyFailed { pubkey, revert_to } => {
+                // Revert the optimistic DB update.
+                if let Some(conn) = self.profile_db.as_ref() {
+                    if revert_to {
+                        profile_db::add_follow(conn, &pubkey);
+                    } else {
+                        profile_db::remove_follow(conn, &pubkey);
+                    }
+                }
                 if let Some(ref mut pp) = self.state.peer_profile {
                     if pp.pubkey == pubkey {
                         pp.is_followed = revert_to;

@@ -86,6 +86,7 @@ impl AppCore {
         self.refresh_all_from_storage();
         self.cache_missing_profile_pics();
         self.refresh_my_profile(false);
+        self.hydrate_follow_list_from_cache();
         self.refresh_follow_list();
 
         if self.network_enabled() {
@@ -565,6 +566,48 @@ impl AppCore {
         });
     }
 
+    /// Load cached follow pubkeys from the profile DB and build an initial
+    /// follow list so the UI can display follows instantly before the network
+    /// fetch completes.
+    fn hydrate_follow_list_from_cache(&mut self) {
+        let Some(conn) = self.profile_db.as_ref() else {
+            return;
+        };
+        let cached_follows = profile_db::load_follows(conn);
+        if cached_follows.is_empty() {
+            return;
+        }
+        let mut follow_list: Vec<crate::state::FollowListEntry> = cached_follows
+            .into_iter()
+            .map(|hex_pubkey| {
+                let npub = PublicKey::from_hex(&hex_pubkey)
+                    .ok()
+                    .and_then(|pk| pk.to_bech32().ok())
+                    .unwrap_or_else(|| hex_pubkey.clone());
+                let cached = self.profiles.get(&hex_pubkey);
+                let name = cached.and_then(|p| p.name.clone());
+                let username = cached.and_then(|p| p.username.clone());
+                let picture_url =
+                    cached.and_then(|p| p.display_picture_url(&self.data_dir, &hex_pubkey));
+                crate::state::FollowListEntry {
+                    pubkey: hex_pubkey,
+                    npub,
+                    name,
+                    username,
+                    picture_url,
+                }
+            })
+            .collect();
+        follow_list.sort_by(|a, b| match (&a.name, &b.name) {
+            (Some(na), Some(nb)) => na.to_lowercase().cmp(&nb.to_lowercase()),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.npub.cmp(&b.npub),
+        });
+        self.state.follow_list = follow_list;
+        self.emit_state();
+    }
+
     pub(super) fn refresh_follow_list(&mut self) {
         if !self.is_logged_in() || !self.network_enabled() {
             return;
@@ -735,10 +778,16 @@ impl AppCore {
     }
 
     pub(super) fn follow_user(&mut self, pubkey_hex: &str) {
+        if let Some(conn) = self.profile_db.as_ref() {
+            profile_db::add_follow(conn, pubkey_hex);
+        }
         self.modify_contact_list(pubkey_hex, true);
     }
 
     pub(super) fn unfollow_user(&mut self, pubkey_hex: &str) {
+        if let Some(conn) = self.profile_db.as_ref() {
+            profile_db::remove_follow(conn, pubkey_hex);
+        }
         self.modify_contact_list(pubkey_hex, false);
     }
 
