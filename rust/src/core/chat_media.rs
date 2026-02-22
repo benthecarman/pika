@@ -190,12 +190,23 @@ impl AppCore {
 
         let caption = caption.trim().to_string();
 
-        let (request_id, encrypted_data, expected_hash_hex, upload_mime, keys, blossom_servers) = {
+        let (
+            request_id,
+            encrypted_data,
+            expected_hash_hex,
+            upload_mime,
+            signer_keys,
+            blossom_servers,
+        ) = {
             let Some(sess) = self.session.as_mut() else {
                 return;
             };
             let Some(group) = sess.groups.get(&chat_id).cloned() else {
                 self.toast("Chat not found");
+                return;
+            };
+            let Some(local_keys) = sess.local_keys.clone() else {
+                self.toast("Media upload requires local key signer");
                 return;
             };
 
@@ -213,7 +224,7 @@ impl AppCore {
                 }
             };
 
-            let account_pubkey = sess.keys.public_key().to_hex();
+            let account_pubkey = sess.pubkey.to_hex();
             let original_hash_hex = hex::encode(upload.original_hash);
             let local_path = media_file_path(
                 &self.data_dir,
@@ -247,7 +258,7 @@ impl AppCore {
                 encrypted_data,
                 expected_hash_hex,
                 upload_mime,
-                sess.keys.clone(),
+                local_keys,
                 self.blossom_servers(),
             )
         };
@@ -282,7 +293,7 @@ impl AppCore {
                         encrypted_data.clone(),
                         Some(upload_mime.clone()),
                         None,
-                        Some(&keys),
+                        Some(&signer_keys),
                     )
                     .await
                 {
@@ -433,7 +444,7 @@ impl AppCore {
             };
 
             let mut rumor = UnsignedEvent::new(
-                sess.keys.public_key(),
+                sess.pubkey,
                 Timestamp::from(ts as u64),
                 Kind::Custom(9),
                 tags,
@@ -457,7 +468,8 @@ impl AppCore {
                     LocalOutgoing {
                         content: content.clone(),
                         timestamp: ts,
-                        sender_pubkey: sess.keys.public_key().to_hex(),
+                        sender_pubkey: sess.pubkey.to_hex(),
+                        reply_to_message_id: None,
                         seq,
                         media: media.clone(),
                     },
@@ -634,7 +646,7 @@ impl AppCore {
                 return;
             };
 
-            let account_pubkey = sess.keys.public_key().to_hex();
+            let account_pubkey = sess.pubkey.to_hex();
             let local_path = media_file_path(
                 &self.data_dir,
                 &account_pubkey,

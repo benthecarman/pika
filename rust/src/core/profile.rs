@@ -128,7 +128,6 @@ impl AppCore {
         );
         let mime_type = Self::normalized_profile_field(mime_type);
 
-        let (client, local_keys, tx) = {
         let blossom_servers = self.blossom_servers();
         let (client, local_keys, tx) = {
             let Some(sess) = self.session.as_ref() else {
