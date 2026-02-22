@@ -5820,6 +5820,7 @@ dependencies = [
  "rustls 0.23.36",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.27.0",

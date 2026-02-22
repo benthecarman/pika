@@ -1,5 +1,7 @@
 mod call_control;
 mod call_runtime;
+mod chat_media;
+mod chat_media_db;
 mod config;
 mod interop;
 mod profile;
@@ -29,11 +31,12 @@ use crate::external_signer::{
 use crate::mdk_support::{open_mdk, PikaMdk};
 use crate::state::now_seconds;
 use crate::state::{
-    AuthMode, AuthState, BusyState, CallDebugStats, CallStatus, ChatMessage, ChatSummary,
-    ChatViewState, MessageDeliveryState, MyProfileState, Screen,
+    AuthMode, AuthState, BusyState, CallDebugStats, CallStatus, ChatMediaAttachment, ChatMessage,
+    ChatSummary, ChatViewState, MessageDeliveryState, MyProfileState, Screen,
 };
 use crate::updates::{AppUpdate, CoreMsg, InternalEvent};
 
+use mdk_core::encrypted_media::types::{EncryptedMediaUpload, MediaReference};
 use mdk_core::prelude::{GroupId, MessageProcessingResult, NostrGroupConfigData};
 use mdk_storage_traits::groups::Pagination;
 
@@ -213,6 +216,24 @@ struct LocalOutgoing {
     sender_pubkey: String,
     reply_to_message_id: Option<String>,
     seq: u64,
+    media: Vec<ChatMediaAttachment>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingMediaSend {
+    chat_id: String,
+    caption: String,
+    upload: EncryptedMediaUpload,
+    account_pubkey: String,
+}
+
+#[derive(Debug, Clone)]
+struct PendingMediaDownload {
+    chat_id: String,
+    account_pubkey: String,
+    group_id: GroupId,
+    reference: MediaReference,
+    encrypted_hash_hex: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +356,7 @@ pub struct AppCore {
     // Nostr kind:0 profile cache (survives across session refreshes).
     profiles: HashMap<String, ProfileCache>, // hex pubkey -> cached profile
     profile_db: Option<rusqlite::Connection>,
+    chat_media_db: Option<rusqlite::Connection>,
 
     // Shared HTTP client (profile pic downloads, push notifications).
     http_client: reqwest::Client,
@@ -347,6 +369,9 @@ pub struct AppCore {
     push_device_id: String,
     push_apns_token: Option<String>,
     push_subscribed_chat_ids: HashSet<String>,
+
+    pending_media_sends: HashMap<String, PendingMediaSend>, // request_id -> pending upload metadata
+    pending_media_downloads: HashMap<String, PendingMediaDownload>, // request_id -> pending download metadata
 
     call_runtime: call_runtime::CallRuntime,
     call_session_params: Option<call_control::CallSessionParams>,
@@ -398,6 +423,13 @@ impl AppCore {
                 None
             }
         };
+        let chat_media_db = match chat_media_db::open_chat_media_db(&data_dir) {
+            Ok(conn) => Some(conn),
+            Err(e) => {
+                tracing::warn!(%e, "failed to open chat media db");
+                None
+            }
+        };
         let profiles = profile_db
             .as_ref()
             .map(profile_db::load_profiles)
@@ -433,12 +465,15 @@ impl AppCore {
             profile_db,
             typing_state: HashMap::new(),
             last_typing_sent: HashMap::new(),
+            chat_media_db,
             http_client: reqwest::Client::new(),
             pfp_semaphore: profile_pics::new_download_semaphore(),
             archived_chats: HashSet::new(),
             push_device_id,
             push_apns_token: None,
             push_subscribed_chat_ids,
+            pending_media_sends: HashMap::new(),
+            pending_media_downloads: HashMap::new(),
             call_runtime: call_runtime::CallRuntime::default(),
             call_session_params: None,
             call_timeline_logged_keys: HashSet::new(),
@@ -2140,6 +2175,8 @@ impl AppCore {
             self.unread_counts.clear();
             self.delivery_overrides.clear();
             self.pending_sends.clear();
+            self.pending_media_sends.clear();
+            self.pending_media_downloads.clear();
             self.local_outbox.clear();
             self.profiles.clear();
             if let Some(conn) = self.profile_db.as_ref() {
@@ -2478,6 +2515,26 @@ impl AppCore {
                 }
                 self.refresh_chat_list_from_storage();
                 self.refresh_current_chat_if_open(&chat_id);
+            }
+            InternalEvent::ChatMediaUploadCompleted {
+                request_id,
+                uploaded_url,
+                descriptor_sha256_hex,
+                error,
+            } => {
+                self.handle_chat_media_upload_completed(
+                    request_id,
+                    uploaded_url,
+                    descriptor_sha256_hex,
+                    error,
+                );
+            }
+            InternalEvent::ChatMediaDownloadFetched {
+                request_id,
+                encrypted_data,
+                error,
+            } => {
+                self.handle_chat_media_download_fetched(request_id, encrypted_data, error);
             }
             InternalEvent::PeerKeyPackageFetched {
                 peer_pubkey,
@@ -3928,6 +3985,7 @@ impl AppCore {
                                 sender_pubkey: sess.pubkey.to_hex(),
                                 reply_to_message_id: effective_reply_to_message_id.clone(),
                                 seq,
+                                media: vec![],
                             },
                         );
 
@@ -4044,6 +4102,22 @@ impl AppCore {
                         }
                     }
                 });
+            }
+            AppAction::SendChatMedia {
+                chat_id,
+                data_base64,
+                mime_type,
+                filename,
+                caption,
+            } => {
+                self.send_chat_media(chat_id, data_base64, mime_type, filename, caption);
+            }
+            AppAction::DownloadChatMedia {
+                chat_id,
+                message_id,
+                original_hash_hex,
+            } => {
+                self.download_chat_media(chat_id, message_id, original_hash_hex);
             }
             AppAction::RetryMessage {
                 chat_id,

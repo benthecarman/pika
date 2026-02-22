@@ -15,7 +15,7 @@ impl AppCore {
     }
 
     pub(super) fn refresh_chat_list_from_storage(&mut self) {
-        let Some(sess) = self.session.as_mut() else {
+        let Some(sess) = self.session.as_ref() else {
             self.state.chat_list = vec![];
             self.emit_chat_list();
             return;
@@ -30,6 +30,7 @@ impl AppCore {
         };
 
         let my_pubkey = sess.pubkey;
+        let my_pubkey_hex = my_pubkey.to_hex();
         let mut index: HashMap<String, GroupIndexEntry> = HashMap::new();
         let mut list: Vec<ChatSummary> = Vec::new();
         let mut missing_profile_pubkeys: Vec<PublicKey> = Vec::new();
@@ -104,7 +105,16 @@ impl AppCore {
                 .ok()
                 .and_then(|v| v.into_iter().find(|m| m.kind == Kind::ChatMessage));
 
-            let stored_last_message = newest.as_ref().map(|m| m.content.clone());
+            let stored_last_message = newest.as_ref().map(|m| {
+                let media = self.chat_media_attachments_for_tags(
+                    &sess.mdk,
+                    &g.mls_group_id,
+                    &chat_id,
+                    &my_pubkey_hex,
+                    &m.tags,
+                );
+                Self::preview_text_with_media(&m.content, &media)
+            });
             let stored_last_message_at = newest
                 .as_ref()
                 .map(|m| m.created_at.as_secs() as i64)
@@ -122,10 +132,18 @@ impl AppCore {
             let local_last_at = local_last.as_ref().map(|m| m.timestamp);
 
             let (last_message, last_message_at) = match (stored_last_message_at, local_last_at) {
-                (Some(a), Some(b)) if b > a => {
-                    (local_last.as_ref().map(|m| m.content.clone()), Some(b))
-                }
-                (None, Some(b)) => (local_last.as_ref().map(|m| m.content.clone()), Some(b)),
+                (Some(a), Some(b)) if b > a => (
+                    local_last
+                        .as_ref()
+                        .map(|m| Self::preview_text_with_media(&m.content, &m.media)),
+                    Some(b),
+                ),
+                (None, Some(b)) => (
+                    local_last
+                        .as_ref()
+                        .map(|m| Self::preview_text_with_media(&m.content, &m.media)),
+                    Some(b),
+                ),
                 _ => (stored_last_message, stored_last_message_at),
             };
 
@@ -166,7 +184,9 @@ impl AppCore {
         }
 
         list.sort_by_key(|c| std::cmp::Reverse(c.last_message_at.unwrap_or(0)));
-        sess.groups = index;
+        if let Some(sess) = self.session.as_mut() {
+            sess.groups = index;
+        }
         self.state.chat_list = list;
         self.emit_chat_list();
         self.sync_push_subscriptions();
@@ -240,7 +260,7 @@ impl AppCore {
     }
 
     pub(super) fn refresh_current_chat(&mut self, chat_id: &str) {
-        let Some(sess) = self.session.as_mut() else {
+        let Some(sess) = self.session.as_ref() else {
             self.state.current_chat = None;
             self.emit_current_chat();
             return;
@@ -327,7 +347,15 @@ impl AppCore {
                     .and_then(|map| map.get(&id))
                     .cloned()
                     .unwrap_or(MessageDeliveryState::Sent);
-                let (display_content, mentions) = resolve_mentions(&m.content, &sender_names);
+                let media = self.chat_media_attachments_for_tags(
+                    &sess.mdk,
+                    &entry.mls_group_id,
+                    chat_id,
+                    &my_pubkey_hex,
+                    &m.tags,
+                );
+                let (mut display_content, mentions) = resolve_mentions(&m.content, &sender_names);
+                display_content = Self::preview_text_with_media(&display_content, &media);
 
                 // Aggregate reactions for this message.
                 let reactions = if let Some(rxns) = reaction_map.get(&id) {
@@ -365,6 +393,7 @@ impl AppCore {
                     is_mine,
                     delivery,
                     reactions,
+                    media,
                     poll_tally: vec![],
                     my_poll_vote: None,
                     html_state: None,
@@ -389,7 +418,8 @@ impl AppCore {
                     .and_then(|map| map.get(&id))
                     .cloned()
                     .unwrap_or(MessageDeliveryState::Pending);
-                let (display_content, mentions) = resolve_mentions(&lm.content, &sender_names);
+                let (mut display_content, mentions) = resolve_mentions(&lm.content, &sender_names);
+                display_content = Self::preview_text_with_media(&display_content, &lm.media);
                 msgs.push(ChatMessage {
                     id,
                     sender_pubkey: lm.sender_pubkey,
@@ -402,6 +432,7 @@ impl AppCore {
                     is_mine: true,
                     delivery,
                     reactions: vec![],
+                    media: lm.media,
                     poll_tally: vec![],
                     my_poll_vote: None,
                     html_state: None,
@@ -449,7 +480,7 @@ impl AppCore {
     }
 
     pub(super) fn load_older_messages(&mut self, chat_id: &str, limit: usize) {
-        let Some(sess) = self.session.as_mut() else {
+        let Some(sess) = self.session.as_ref() else {
             return;
         };
         let Some(entry) = sess.groups.get(chat_id).cloned() else {
@@ -512,7 +543,15 @@ impl AppCore {
                     .and_then(|map| map.get(&id))
                     .cloned()
                     .unwrap_or(MessageDeliveryState::Sent);
-                let (display_content, mentions) = resolve_mentions(&m.content, &sender_names);
+                let media = self.chat_media_attachments_for_tags(
+                    &sess.mdk,
+                    &entry.mls_group_id,
+                    chat_id,
+                    &my_pubkey_hex,
+                    &m.tags,
+                );
+                let (mut display_content, mentions) = resolve_mentions(&m.content, &sender_names);
+                display_content = Self::preview_text_with_media(&display_content, &media);
                 ChatMessage {
                     id,
                     sender_pubkey: sender_hex,
@@ -525,6 +564,7 @@ impl AppCore {
                     is_mine,
                     delivery,
                     reactions: vec![],
+                    media,
                     poll_tally: vec![],
                     my_poll_vote: None,
                     html_state: None,
@@ -814,6 +854,7 @@ mod tests {
             is_mine: false,
             delivery: MessageDeliveryState::Sent,
             reactions: vec![],
+            media: vec![],
             poll_tally: vec![],
             my_poll_vote: None,
             html_state: None,
