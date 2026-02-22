@@ -105,16 +105,7 @@ impl AppCore {
                 .ok()
                 .and_then(|v| v.into_iter().find(|m| m.kind == Kind::ChatMessage));
 
-            let stored_last_message = newest.as_ref().map(|m| {
-                let media = self.chat_media_attachments_for_tags(
-                    &sess.mdk,
-                    &g.mls_group_id,
-                    &chat_id,
-                    &my_pubkey_hex,
-                    &m.tags,
-                );
-                Self::preview_text_with_media(&m.content, &media)
-            });
+            let stored_last_message = newest.as_ref().map(|m| m.content.clone());
             let stored_last_message_at = newest
                 .as_ref()
                 .map(|m| m.created_at.as_secs() as i64)
@@ -133,15 +124,11 @@ impl AppCore {
 
             let (last_message, last_message_at) = match (stored_last_message_at, local_last_at) {
                 (Some(a), Some(b)) if b > a => (
-                    local_last
-                        .as_ref()
-                        .map(|m| Self::preview_text_with_media(&m.content, &m.media)),
+                    local_last.as_ref().map(|m| m.content.clone()),
                     Some(b),
                 ),
                 (None, Some(b)) => (
-                    local_last
-                        .as_ref()
-                        .map(|m| Self::preview_text_with_media(&m.content, &m.media)),
+                    local_last.as_ref().map(|m| m.content.clone()),
                     Some(b),
                 ),
                 _ => (stored_last_message, stored_last_message_at),
@@ -149,7 +136,7 @@ impl AppCore {
 
             let unread_count = *self.unread_counts.get(&chat_id).unwrap_or(&0);
 
-            let last_message = last_message.map(|msg| {
+            let last_message = last_message.map(|msg: String| {
                 if msg.contains("```pika-prompt-response\n") {
                     "Voted in poll".to_string()
                 } else if msg.contains("```pika-html-update ") {

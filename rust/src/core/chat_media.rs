@@ -11,7 +11,6 @@ use super::chat_media_db::{self, ChatMediaRecord};
 use super::*;
 
 const MAX_CHAT_MEDIA_BYTES: usize = 32 * 1024 * 1024;
-const MEDIA_PLACEHOLDER_TEXT: &str = "Media";
 
 fn sanitize_filename(filename: &str) -> String {
     let mut out = String::with_capacity(filename.len().min(120));
@@ -139,14 +138,6 @@ impl AppCore {
         }
 
         out
-    }
-
-    pub(super) fn preview_text_with_media(content: &str, media: &[ChatMediaAttachment]) -> String {
-        if !media.is_empty() && content.trim().is_empty() {
-            MEDIA_PLACEHOLDER_TEXT.to_string()
-        } else {
-            content.to_string()
-        }
     }
 
     pub(super) fn send_chat_media(
