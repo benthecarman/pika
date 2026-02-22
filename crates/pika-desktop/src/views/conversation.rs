@@ -151,6 +151,27 @@ pub fn conversation_view<'a>(
         )
         .width(Fill)
         .into()
+    } else if let Some(peer) = chat.members.first() {
+        let peer_pubkey = peer.pubkey.clone();
+        container(
+            button(header_content)
+                .on_press(Message::OpenPeerProfile(peer_pubkey))
+                .width(Fill)
+                .style(|_: &Theme, status: button::Status| {
+                    let bg = match status {
+                        button::Status::Hovered => theme::HOVER_BG,
+                        _ => theme::RAIL_BG,
+                    };
+                    button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        text_color: theme::TEXT_PRIMARY,
+                        border: iced::border::rounded(0),
+                        ..Default::default()
+                    }
+                }),
+        )
+        .width(Fill)
+        .into()
     } else {
         container(header_content)
             .width(Fill)

@@ -138,13 +138,34 @@ fn member_row<'a>(
         display_name.clone()
     };
 
-    let mut row_content = row![
-        avatar,
-        text(label).size(14).color(theme::TEXT_PRIMARY),
-        Space::new().width(Fill),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    let pubkey_for_profile = member.pubkey.clone();
+    let profile_btn = button(
+        row![avatar, text(label).size(14).color(theme::TEXT_PRIMARY),]
+            .spacing(10)
+            .align_y(Alignment::Center),
+    )
+    .on_press_maybe(if is_me {
+        None
+    } else {
+        Some(Message::OpenPeerProfile(pubkey_for_profile))
+    })
+    .padding(0)
+    .style(|_: &Theme, status: button::Status| {
+        let bg = match status {
+            button::Status::Hovered => theme::HOVER_BG,
+            _ => iced::Color::TRANSPARENT,
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: theme::TEXT_PRIMARY,
+            border: iced::border::rounded(6),
+            ..Default::default()
+        }
+    });
+
+    let mut row_content = row![profile_btn, Space::new().width(Fill),]
+        .spacing(10)
+        .align_y(Alignment::Center);
 
     if is_me && is_admin {
         row_content = row_content.push(text("Admin").size(12).color(theme::TEXT_FADED));

@@ -148,8 +148,17 @@ pub fn message_bubble<'a>(
 
         let mut bubble_content = column![].spacing(2);
         if !sender_name.is_empty() {
-            bubble_content =
-                bubble_content.push(text(sender_name).size(12).color(theme::ACCENT_BLUE));
+            let sender_pk = msg.sender_pubkey.clone();
+            bubble_content = bubble_content.push(
+                button(text(sender_name).size(12).color(theme::ACCENT_BLUE))
+                    .on_press(Message::OpenPeerProfile(sender_pk))
+                    .padding(0)
+                    .style(|_: &Theme, _| button::Style {
+                        background: Some(Background::Color(Color::TRANSPARENT)),
+                        text_color: theme::ACCENT_BLUE,
+                        ..Default::default()
+                    }),
+            );
         }
         if let Some(preview) = make_reply_preview() {
             bubble_content = bubble_content.push(preview);

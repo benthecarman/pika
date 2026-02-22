@@ -148,6 +148,12 @@ pub enum Message {
     // Mention autocomplete
     MentionSelected { npub: String, name: String },
     MentionSelectTop,
+    // Peer profile
+    OpenPeerProfile(String),
+    ClosePeerProfile,
+    FollowPeer,
+    UnfollowPeer,
+    CopyPeerNpub,
     // Device management
     ShowDeviceManagement,
     CloseDeviceManagement,
@@ -612,6 +618,42 @@ impl DesktopApp {
                 self.clear_all_overlays();
             }
 
+            // ── Peer profile ──────────────────────────────────────────
+            Message::OpenPeerProfile(pubkey) => {
+                if let Some(manager) = &self.manager {
+                    manager.dispatch(AppAction::OpenPeerProfile { pubkey });
+                }
+            }
+            Message::ClosePeerProfile => {
+                if let Some(manager) = &self.manager {
+                    manager.dispatch(AppAction::ClosePeerProfile);
+                }
+            }
+            Message::FollowPeer => {
+                if let Some(profile) = &self.state.peer_profile {
+                    if let Some(manager) = &self.manager {
+                        manager.dispatch(AppAction::FollowUser {
+                            pubkey: profile.pubkey.clone(),
+                        });
+                    }
+                }
+            }
+            Message::UnfollowPeer => {
+                if let Some(profile) = &self.state.peer_profile {
+                    if let Some(manager) = &self.manager {
+                        manager.dispatch(AppAction::UnfollowUser {
+                            pubkey: profile.pubkey.clone(),
+                        });
+                    }
+                }
+            }
+            Message::CopyPeerNpub => {
+                if let Some(profile) = &self.state.peer_profile {
+                    self.profile_toast = Some("Copied npub".to_string());
+                    return iced::clipboard::write(profile.npub.clone());
+                }
+            }
+
             // ── Reactions ──────────────────────────────────────────
             Message::ReactToMessage { message_id, emoji } => {
                 if let Some(chat) = &self.state.current_chat {
@@ -922,6 +964,12 @@ impl DesktopApp {
                 .and_then(|m| m.name.as_deref())
                 .unwrap_or("Unknown");
             views::call_screen::call_screen_view(call, peer_name, &self.video_pipeline)
+        } else if matches!(route.detail_pane, DesktopDetailPane::PeerProfile { .. }) {
+            if let Some(profile) = &self.state.peer_profile {
+                views::peer_profile::peer_profile_view(profile, cache)
+            } else {
+                views::empty_state::empty_state_view()
+            }
         } else if route.selected_chat_id.is_some() {
             if let Some(chat) = &self.state.current_chat {
                 let replying_to = self.reply_to_message_id.as_ref().and_then(|reply_id| {
@@ -941,8 +989,6 @@ impl DesktopApp {
             } else {
                 views::empty_state::empty_state_view()
             }
-        } else if matches!(route.detail_pane, DesktopDetailPane::PeerProfile { .. }) {
-            views::empty_state::empty_state_view()
         } else {
             views::empty_state::empty_state_view()
         };
