@@ -319,7 +319,6 @@ pub struct AppCore {
     pub state: crate::state::AppState,
     rev: u64,
     outbox_seq: u64,
-    last_outgoing_ts: i64,
 
     update_sender: Sender<AppUpdate>,
     core_sender: Sender<CoreMsg>,
@@ -442,7 +441,6 @@ impl AppCore {
             state,
             rev: 0,
             outbox_seq: 0,
-            last_outgoing_ts: 0,
             update_sender,
             core_sender,
             shared_state,
@@ -2189,7 +2187,6 @@ impl AppCore {
             self.call_session_params = None;
             self.call_timeline_logged_keys.clear();
             self.save_call_timeline();
-            self.last_outgoing_ts = 0;
             self.emit_router();
             self.emit_busy();
             self.emit_chat_list();

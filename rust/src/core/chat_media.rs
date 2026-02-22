@@ -416,18 +416,7 @@ impl AppCore {
     ) {
         let network_enabled = self.network_enabled();
         let fallback_relays = self.default_relays();
-
-        // Nostr timestamps are second-granularity; rapid sends can share the same second.
-        // Keep outgoing timestamps monotonic to avoid tie-related paging nondeterminism.
-        let ts = {
-            let now = now_seconds();
-            if now <= self.last_outgoing_ts {
-                self.last_outgoing_ts += 1;
-            } else {
-                self.last_outgoing_ts = now;
-            }
-            self.last_outgoing_ts
-        };
+        let ts = now_seconds();
 
         let (client, wrapper, relays, rumor_id_hex) = {
             let Some(sess) = self.session.as_mut() else {
