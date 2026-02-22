@@ -803,6 +803,19 @@ impl AppCore {
     }
 
     fn cache_missing_profile_pics(&self) {
+        let my_pubkey = self.session.as_ref().map(|s| s.pubkey.to_hex());
+
+        // Download own profile pic first so it's visible immediately.
+        if let Some(ref pk) = my_pubkey {
+            if let Some(cache) = self.profiles.get(pk) {
+                if let Some(ref url) = cache.picture_url {
+                    if !profile_pics::cached_path(&self.data_dir, pk).exists() {
+                        self.spawn_pfp_download(pk.clone(), url.clone());
+                    }
+                }
+            }
+        }
+
         // Collect chat member pubkeys so we can prioritize them.
         let mut chat_member_pubkeys: HashSet<String> = HashSet::new();
         if let Some(sess) = self.session.as_ref() {
@@ -813,9 +826,12 @@ impl AppCore {
             }
         }
 
-        // Download chat members first, then everyone else.
+        // Download chat members next, then everyone else.
         let mut deferred = Vec::new();
         for (pubkey, cache) in &self.profiles {
+            if my_pubkey.as_deref() == Some(pubkey) {
+                continue; // already spawned above
+            }
             let Some(ref url) = cache.picture_url else {
                 continue;
             };
