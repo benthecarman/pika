@@ -10,6 +10,17 @@ fn workspace_root() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
+fn emit_skip(reason: &str) {
+    eprintln!("SKIP: {reason}");
+    if std::env::var("GITHUB_ACTIONS")
+        .ok()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        eprintln!("::notice title=pikahut integration skipped::{reason}");
+    }
+}
+
 #[tokio::test]
 #[ignore = "heavy integration lane (OpenClaw checkout + network)"]
 async fn openclaw_gateway_e2e() -> Result<()> {
@@ -17,7 +28,7 @@ async fn openclaw_gateway_e2e() -> Result<()> {
     if let Err(skip) =
         caps.require_all_or_skip(&[Requirement::OpenclawCheckout, Requirement::PublicNetwork])
     {
-        eprintln!("SKIP: {skip}");
+        emit_skip(&skip.to_string());
         return Ok(());
     }
 

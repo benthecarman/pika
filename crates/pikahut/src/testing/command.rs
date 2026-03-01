@@ -406,7 +406,7 @@ mod tests {
         }
 
         let mut context = super::TestContext::builder("command-run")
-            .artifact_policy(super::super::ArtifactPolicy::DeleteOnSuccess)
+            .artifact_policy(super::super::ArtifactPolicy::PreserveOnFailure)
             .build()
             .unwrap();
         let runner = CommandRunner::new(&context);
@@ -434,7 +434,7 @@ mod tests {
         let marker_path = marker_dir.path().join("retry-marker");
 
         let mut context = super::TestContext::builder("command-retry")
-            .artifact_policy(super::super::ArtifactPolicy::DeleteOnSuccess)
+            .artifact_policy(super::super::ArtifactPolicy::PreserveOnFailure)
             .build()
             .unwrap();
         let runner = CommandRunner::new(&context);
@@ -470,7 +470,7 @@ raise SystemExit(1)
         }
 
         let mut context = super::TestContext::builder("command-timeout")
-            .artifact_policy(super::super::ArtifactPolicy::DeleteOnSuccess)
+            .artifact_policy(super::super::ArtifactPolicy::PreserveOnFailure)
             .build()
             .unwrap();
         let runner = CommandRunner::new(&context);
@@ -494,7 +494,7 @@ raise SystemExit(1)
         }
 
         let mut context = super::TestContext::builder("command-spawn")
-            .artifact_policy(super::super::ArtifactPolicy::DeleteOnSuccess)
+            .artifact_policy(super::super::ArtifactPolicy::PreserveOnFailure)
             .build()
             .unwrap();
         let runner = CommandRunner::new(&context);

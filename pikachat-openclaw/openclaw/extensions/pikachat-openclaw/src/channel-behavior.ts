@@ -14,8 +14,6 @@ export function normalizeGroupId(input: string): string {
     .replace(/^pikachat-openclaw:/i, "")
     .replace(/^pikachat:/i, "")
     .replace(/^group:/i, "")
-    .replace(/^pikachat-openclaw:group:/i, "")
-    .replace(/^pikachat:group:/i, "")
     .trim()
     .toLowerCase();
 }

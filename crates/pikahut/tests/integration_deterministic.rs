@@ -18,12 +18,23 @@ fn capabilities() -> Capabilities {
     Capabilities::probe(&workspace_root())
 }
 
+fn emit_skip(reason: &str) {
+    eprintln!("SKIP: {reason}");
+    if std::env::var("GITHUB_ACTIONS")
+        .ok()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        eprintln!("::notice title=pikahut integration skipped::{reason}");
+    }
+}
+
 fn skip_if_missing(requirements: &[Requirement]) -> Result<bool> {
     let caps = capabilities();
     match caps.require_all_or_skip(requirements) {
         Ok(()) => Ok(false),
         Err(skip) => {
-            eprintln!("SKIP: {skip}");
+            emit_skip(&skip.to_string());
             Ok(true)
         }
     }

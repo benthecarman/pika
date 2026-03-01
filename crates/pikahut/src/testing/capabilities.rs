@@ -253,12 +253,16 @@ impl Capabilities {
 }
 
 fn command_exists(binary: &str) -> bool {
-    Command::new("sh")
-        .arg("-lc")
-        .arg(format!("command -v {binary} >/dev/null 2>&1"))
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    let candidate = Path::new(binary);
+    if candidate.is_absolute() || binary.contains('/') {
+        return candidate.is_file();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(binary))
+        .any(|path| path.is_file())
 }
 
 fn android_avd_exists(avd_name: &str) -> bool {

@@ -11,6 +11,17 @@ fn workspace_root() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
+fn emit_skip(reason: &str) {
+    eprintln!("SKIP: {reason}");
+    if std::env::var("GITHUB_ACTIONS")
+        .ok()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        eprintln!("::notice title=pikahut integration skipped::{reason}");
+    }
+}
+
 #[test]
 #[ignore = "nightly macOS primal interop lane"]
 fn primal_nostrconnect_smoke() -> Result<()> {
@@ -20,7 +31,7 @@ fn primal_nostrconnect_smoke() -> Result<()> {
         Requirement::Xcode,
         Requirement::PublicNetwork,
     ]) {
-        eprintln!("SKIP: {skip}");
+        emit_skip(&skip.to_string());
         return Ok(());
     }
 

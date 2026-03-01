@@ -9,8 +9,6 @@ use crate::config;
 /// Artifact retention policy for integration test runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ArtifactPolicy {
-    /// Remove auto-created state/artifacts after successful completion.
-    DeleteOnSuccess,
     /// Preserve state/artifacts when a run fails, but clean successful runs.
     #[default]
     PreserveOnFailure,
@@ -194,7 +192,6 @@ impl TestContext {
 
     fn should_preserve(&self) -> bool {
         match self.artifact_policy {
-            ArtifactPolicy::DeleteOnSuccess => !self.success,
             ArtifactPolicy::PreserveOnFailure => !self.success,
             ArtifactPolicy::PreserveAlways => true,
         }
@@ -254,10 +251,10 @@ mod tests {
     }
 
     #[test]
-    fn delete_on_success_removes_auto_state_dir() {
+    fn preserve_on_failure_removes_auto_state_dir_on_success() {
         let state_dir = {
             let mut context = TestContext::builder("cleanup-on-success")
-                .artifact_policy(ArtifactPolicy::DeleteOnSuccess)
+                .artifact_policy(ArtifactPolicy::PreserveOnFailure)
                 .build()
                 .unwrap();
             let path = context.state_dir().to_path_buf();
@@ -286,7 +283,7 @@ mod tests {
         {
             let mut context = TestContext::builder("explicit-state")
                 .state_dir(&state_dir)
-                .artifact_policy(ArtifactPolicy::DeleteOnSuccess)
+                .artifact_policy(ArtifactPolicy::PreserveOnFailure)
                 .build()
                 .unwrap();
             context.mark_success();

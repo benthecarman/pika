@@ -109,7 +109,7 @@ pub async fn run_scenario(args: TestScenarioArgs) -> Result<()> {
         started_fixture,
         auto_state_dir,
         false,
-        false,
+        true,
     );
 
     let mut cmd = cargo_pikachat_cmd(&root);
@@ -378,7 +378,7 @@ pub async fn run_cli_smoke(args: CliSmokeArgs) -> Result<()> {
         started_fixture,
         auto_state_dir,
         false,
-        false,
+        true,
     );
 
     println!("=== Alice: create identity ===");
@@ -499,6 +499,7 @@ pub async fn run_cli_smoke(args: CliSmokeArgs) -> Result<()> {
         ],
     )?;
 
+    let text_probe = "hello from alice";
     println!("=== Alice: send message ===");
     run_pikachat_ok(
         &root,
@@ -511,7 +512,7 @@ pub async fn run_cli_smoke(args: CliSmokeArgs) -> Result<()> {
             "--group",
             &group,
             "--content",
-            "hello from alice",
+            text_probe,
         ],
     )?;
 
@@ -545,6 +546,21 @@ pub async fn run_cli_smoke(args: CliSmokeArgs) -> Result<()> {
         ],
     )?;
     println!("{}", serde_json::to_string_pretty(&messages)?);
+    let saw_probe = messages
+        .get("messages")
+        .and_then(Value::as_array)
+        .map(|msgs| {
+            msgs.iter().any(|msg| {
+                msg.get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == text_probe)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if !saw_probe {
+        bail!("bob inbox does not contain expected message content: {text_probe}");
+    }
 
     if args.with_media {
         println!("=== Alice: send media ===");
@@ -981,6 +997,7 @@ async fn start_profile(
         Some(state_dir.to_path_buf()),
     )?;
     fixture::up_background(&resolved).await?;
+    fixture::wait(state_dir, 30).await?;
     let manifest = Manifest::load(state_dir)?.ok_or_else(|| {
         anyhow!(
             "manifest missing after starting profile {} at {}",
@@ -988,7 +1005,6 @@ async fn start_profile(
             state_dir.display()
         )
     })?;
-    fixture::wait(state_dir, 30).await?;
     Ok(manifest)
 }
 
@@ -1094,22 +1110,16 @@ fn json_str(value: &Value, key: &str) -> Result<String> {
 }
 
 fn command_exists(cmd: &str) -> bool {
-    Command::new("sh")
-        .arg("-lc")
-        .arg(format!("command -v {} >/dev/null 2>&1", shell_escape(cmd)))
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-fn shell_escape(s: &str) -> String {
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
-    {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
+    let candidate = Path::new(cmd);
+    if candidate.is_absolute() || cmd.contains('/') {
+        return candidate.is_file();
     }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(cmd))
+        .any(|path| path.is_file())
 }
 
 fn pick_free_port() -> Result<u16> {
@@ -1184,6 +1194,10 @@ fn resolve_ui_client_nsec(root: &Path) -> Result<String> {
         }
     }
 
+    if !command_exists("python3") {
+        bail!("python3 is required to generate an ephemeral nsec for local UI E2E");
+    }
+
     let script = r#"
 import secrets
 CHARSET='qpzry9x8gf2tvdw0s3jn54khce6mua7l'
@@ -1220,6 +1234,9 @@ print('nsec'+'1'+''.join([CHARSET[d] for d in combined]))
     let generated = String::from_utf8(output.stdout)?.trim().to_string();
     if generated.is_empty() {
         bail!("python nsec generator returned empty output");
+    }
+    if !generated.starts_with("nsec1") {
+        bail!("python nsec generator returned invalid bech32 nsec: {generated}");
     }
     eprintln!(
         "note: generated ephemeral local e2e nsec (set PIKA_UI_E2E_NSEC or .pikachat-test-nsec to override)"
@@ -1281,23 +1298,16 @@ fn check_mdk_skew(rust_interop_dir: &Path) -> Result<()> {
     let harness_cargo = rust_interop_dir.join("rust_harness/Cargo.toml");
     let harness_text = fs::read_to_string(&harness_cargo)
         .with_context(|| format!("read {}", harness_cargo.display()))?;
+    let harness_toml: toml::Value = toml::from_str(&harness_text)
+        .with_context(|| format!("parse {}", harness_cargo.display()))?;
 
-    let mut harness_rev = None;
-    for line in harness_text.lines() {
-        if !line.contains("mdk-core") || !line.contains("rev = \"") {
-            continue;
-        }
-        if let Some(start) = line.find("rev = \"") {
-            let rest = &line[start + 7..];
-            if let Some(end) = rest.find('"') {
-                let rev = &rest[..end];
-                if rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()) {
-                    harness_rev = Some(rev.to_string());
-                    break;
-                }
-            }
-        }
-    }
+    let harness_rev = harness_toml
+        .get("dependencies")
+        .and_then(|deps| deps.get("mdk-core"))
+        .and_then(|dep| dep.get("rev"))
+        .and_then(toml::Value::as_str)
+        .filter(|rev| rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_string);
 
     let Some(harness_rev) = harness_rev else {
         return Ok(());

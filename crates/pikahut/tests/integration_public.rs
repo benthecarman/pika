@@ -79,6 +79,17 @@ fn parse_dotenv_value(raw: &str) -> String {
     raw.to_string()
 }
 
+fn emit_skip(reason: &str) {
+    eprintln!("SKIP: {reason}");
+    if std::env::var("GITHUB_ACTIONS")
+        .ok()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        eprintln!("::notice title=pikahut integration skipped::{reason}");
+    }
+}
+
 fn skip_if_missing(requirements: &[Requirement]) -> Result<bool> {
     let caps = Capabilities::probe(&workspace_root());
     for requirement in requirements {
@@ -87,25 +98,25 @@ fn skip_if_missing(requirements: &[Requirement]) -> Result<bool> {
                 if optional_env(ENV_PIKA_TEST_NSEC).is_none()
                     && optional_env(ENV_PIKA_UI_E2E_NSEC).is_none()
                 {
-                    eprintln!(
-                        "SKIP: EnvSecretPikaTestNsec: {} or {} is not set",
+                    emit_skip(&format!(
+                        "EnvSecretPikaTestNsec: {} or {} is not set",
                         ENV_PIKA_TEST_NSEC, ENV_PIKA_UI_E2E_NSEC
-                    );
+                    ));
                     return Ok(true);
                 }
             }
             Requirement::EnvVar { name } => {
                 if optional_env(name).is_none() {
-                    eprintln!(
-                        "SKIP: EnvVar {{ name: {name} }}: required env var is missing: {name}"
-                    );
+                    emit_skip(&format!(
+                        "EnvVar {{ name: {name} }}: required env var is missing: {name}"
+                    ));
                     return Ok(true);
                 }
             }
             _ => match caps.require_or_skip_outcome(requirement.clone()) {
                 RequireOutcome::Proceed => {}
                 RequireOutcome::Skip(skip) => {
-                    eprintln!("SKIP: {skip}");
+                    emit_skip(&skip.to_string());
                     return Ok(true);
                 }
             },
