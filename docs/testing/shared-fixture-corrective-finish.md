@@ -42,3 +42,16 @@ The following corrective actions are intentionally scoped as immediate removals/
 | De-scope legacy negotiated shared-fixture spec from active implementation source of truth | Treat prior spec as historical context only | `todos/pikahut-shared-fixture-pool-negotiated.md` | Active corrective implementation source is `todos/shared-fixture-corrective-finish.md`. |
 | Remove overlap between older corrective todo files and active finish todo | Keep old files as superseded pointers only | `todos/pikahut-shared-fixture-corrective.md`, `todos/shared-fixture-closeout-corrective.md` | Prevents dual-scope implementation drift and conflicting completion claims. |
 | De-scope unsupported shared-promotion assumptions from current cycle | No lane/profile may claim `SharedSupported` status yet | `docs/testing/shared-fixture-corrective-finish.md` | Promotion remains explicitly evidence-gated in later steps. |
+
+## Tenant Namespace Helper Enforcement (Step 3)
+
+Canonical helper surface:
+- `crates/pikahut/src/testing/tenant.rs` exposes `TenantNamespace::{relay_namespace,moq_namespace}`.
+
+Enforcement boundary for this cycle:
+- Shared-capable internals must route relay/MoQ tenant naming through `TenantNamespace` helpers.
+- No additional shared-capable internals are promoted by default in this cycle; strict-only remains default outside explicit experimental validation.
+
+Current corrective position:
+- Ad-hoc tenant namespace construction is treated as out-of-policy for shared-capable internals.
+- Future shared-capable module additions must reference `TenantNamespace` as the naming source of truth.
