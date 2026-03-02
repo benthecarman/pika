@@ -330,6 +330,13 @@ fun MyProfileSheet(
             if (developerModeEnabled) {
                 item {
                     ProfileSectionCard(title = "Developer Mode") {
+                        OutlinedButton(
+                            onClick = { manager.dispatch(AppAction.WipeProfileCache) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Wipe Profile Cache")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = { showWipeConfirm = true },
                             colors = ButtonDefaults.buttonColors(
@@ -340,7 +347,7 @@ fun MyProfileSheet(
                             Text("Wipe All Local Data")
                         }
                         Text(
-                            "Deletes all local Pika data on this device and logs out immediately.",
+                            "Wipe Profile Cache clears cached profiles and pictures. Wipe All Local Data deletes everything and logs out.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
