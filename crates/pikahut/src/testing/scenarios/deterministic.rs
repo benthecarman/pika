@@ -20,12 +20,30 @@ use super::types::{
     CliSmokeRequest, ScenarioRequest, ScenarioRunOutput, UiE2eLocalRequest, UiPlatform,
 };
 
+fn shorten_run_name(run_name: &str) -> String {
+    const MAX_RUN_NAME_CHARS: usize = 15;
+    const PREFIX_CHARS: usize = 6;
+
+    if run_name.chars().count() <= MAX_RUN_NAME_CHARS {
+        return run_name.to_string();
+    }
+
+    let mut hash: u32 = 0x811C9DC5;
+    for byte in run_name.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    let prefix: String = run_name.chars().take(PREFIX_CHARS).collect();
+    format!("{prefix}-{hash:08x}")
+}
+
 fn build_context(
     run_name: &str,
     state_dir: Option<PathBuf>,
     artifact_policy: ArtifactPolicy,
 ) -> Result<TestContext> {
-    let mut builder = TestContext::builder(run_name).artifact_policy(artifact_policy);
+    let effective_run_name = shorten_run_name(run_name);
+    let mut builder = TestContext::builder(&effective_run_name).artifact_policy(artifact_policy);
     if let Some(path) = state_dir {
         builder = builder.state_dir(path);
     }
@@ -847,4 +865,23 @@ pub async fn run_ui_e2e_local(args: UiE2eLocalRequest) -> Result<ScenarioRunOutp
 
     context.mark_success();
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_run_name;
+
+    #[test]
+    fn shorten_run_name_keeps_short_inputs() {
+        assert_eq!(shorten_run_name("cli-smoke"), "cli-smoke");
+    }
+
+    #[test]
+    fn shorten_run_name_is_bounded_and_stable() {
+        let a = shorten_run_name("scenario-invite-and-chat-daemon");
+        let b = shorten_run_name("scenario-invite-and-chat-rust-bot");
+        assert!(a.len() <= 15);
+        assert!(b.len() <= 15);
+        assert_ne!(a, b, "different scenarios must get distinct run names");
+    }
 }
