@@ -137,6 +137,16 @@ final class ChatDeepLinkTests: XCTestCase {
         XCTAssertNil(AppManager.parseChatDeepLink(url))
     }
 
+    func testShareDispatchDeepLink_validHost() {
+        let url = URL(string: "pika://share-send")!
+        XCTAssertTrue(AppManager.isShareDispatchDeepLink(url))
+    }
+
+    func testShareDispatchDeepLink_wrongHost() {
+        let url = URL(string: "pika://chat/abc")!
+        XCTAssertFalse(AppManager.isShareDispatchDeepLink(url))
+    }
+
     func testOnOpenURL_dispatchesCreateChat() async {
         let core = MockCore(state: makeTestState(rev: 1))
         let store = MockAuthStore()

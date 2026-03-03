@@ -57,6 +57,15 @@ if [ "${PIKA_IOS_DEVICE:-0}" = "1" ]; then
 fi
 SIM_UDID="${PIKA_IOS_SIM_UDID:-}"
 
+xcode_build_version() {
+  ./tools/xcode-run xcodebuild -version 2>/dev/null | awk '/^Build version / { print $3; exit }'
+}
+
+XCODE_BUILD_VERSION="${PIKA_XCODE_BUILD_VERSION:-$(xcode_build_version)}"
+if [ -z "${XCODE_BUILD_VERSION:-}" ]; then
+  XCODE_BUILD_VERSION="unknown"
+fi
+
 usage() {
   cat <<EOF
 usage: ./tools/run-ios [--sim|--device] [--release] [--console] [--udid <udid>] [--list-devices]
@@ -70,6 +79,7 @@ Env:
   PIKA_IOS_SIM_UDID         (optional, for --sim)
   PIKA_IOS_DEVICE=1         default to --device (if set, requires team id)
   PIKA_IOS_CONSOLE=1        default to --console
+  PIKA_IOS_CODE_SIGNING_ALLOWED  YES|NO for simulator builds (default: YES)
   PIKA_RUST_PROFILE         debug|release (default for run-ios: debug)
   PIKA_NO_RELAY_OVERRIDE=1  disable dev-friendly relay defaults
   PIKA_IOS_DEVICE_ALLOW_LOCAL_OVERRIDES=1  allow localhost relay/MoQ overrides on physical devices
@@ -256,6 +266,8 @@ if [ "$MODE" = "device" ]; then
   # Build core xcframework + (re)generate the project.
   just ios-xcframework ios-xcodeproj
 
+  device_derived_data_path="${PIKA_IOS_DEVICE_DERIVED_DATA_PATH:-ios/build-device-$XCODE_BUILD_VERSION}"
+
   # Build signed device .app (must unset LD/CC/CXX inside Nix shells).
   signing_settings=()
   signing_settings+=("DEVELOPMENT_TEAM=$IOS_TEAM_ID")
@@ -270,13 +282,13 @@ if [ "$MODE" = "device" ]; then
     -configuration Debug \
     -sdk iphoneos \
     -destination "id=$UDID" \
-    -derivedDataPath ios/build-device \
+    -derivedDataPath "$device_derived_data_path" \
     -allowProvisioningUpdates \
     -skipMacroValidation \
     "${signing_settings[@]}" \
     build
 
-  app_path="ios/build-device/Build/Products/Debug-iphoneos/Pika.app"
+  app_path="$device_derived_data_path/Build/Products/Debug-iphoneos/Pika.app"
   if [ ! -d "$app_path" ]; then
     echo "error: missing built app at $app_path" >&2
     exit 1
@@ -383,6 +395,7 @@ if [ -z "${udid:-}" ]; then
   echo "error: could not determine simulator udid" >&2
   exit 1
 fi
+export PIKA_IOS_SIM_UDID="$udid"
 
 # Faster dev loop defaults: debug Rust and only the required simulator target.
 if [ -z "${PIKA_IOS_SIM_ARCH:-}" ]; then
@@ -392,15 +405,18 @@ if [ -z "${PIKA_IOS_RUST_TARGETS:-}" ]; then
   export PIKA_IOS_RUST_TARGETS="aarch64-apple-ios-sim"
 fi
 
+derived_data_path="${PIKA_IOS_DERIVED_DATA_PATH:-ios/build-$XCODE_BUILD_VERSION}"
+export PIKA_IOS_DERIVED_DATA_PATH="$derived_data_path"
+
 just ios-build-sim
 
-app_path="ios/build/Build/Products/Debug-iphonesimulator/Pika.app"
+app_path="$derived_data_path/Build/Products/Debug-iphonesimulator/Pika.app"
 if [ ! -d "$app_path" ]; then
   # Backward-compatible fallback for older local build layouts.
-  app_path="ios/build/Debug-iphonesimulator/Pika.app"
+  app_path="$derived_data_path/Debug-iphonesimulator/Pika.app"
 fi
 if [ ! -d "$app_path" ]; then
-  echo "error: missing built app at ios/build/Build/Products/Debug-iphonesimulator/Pika.app" >&2
+  echo "error: missing built app at $derived_data_path/Build/Products/Debug-iphonesimulator/Pika.app" >&2
   exit 1
 fi
 

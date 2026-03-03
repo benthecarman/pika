@@ -648,8 +648,29 @@ ios-appstore: ios-xcframework ios-xcodeproj
 
 # Build iOS app for simulator.
 ios-build-sim: ios-xcframework ios-xcodeproj
-    SIM_ARCH="${PIKA_IOS_SIM_ARCH:-arm64}"; \
-    ./tools/xcode-run xcodebuild -project ios/Pika.xcodeproj -scheme Pika -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath ios/build build -skipMacroValidation ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-org.pikachat.pika.dev}" PIKA_IOS_URL_SCHEME="${PIKA_IOS_URL_SCHEME:-pika}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SIM_ARCH="${PIKA_IOS_SIM_ARCH:-arm64}"
+    DERIVED_DATA_PATH="${PIKA_IOS_DERIVED_DATA_PATH:-ios/build}"
+    CODE_SIGNING_ALLOWED="${PIKA_IOS_CODE_SIGNING_ALLOWED:-YES}"
+    if [ -n "${PIKA_IOS_SIM_UDID:-}" ]; then
+      DEST="id=${PIKA_IOS_SIM_UDID}"
+    else
+      DEST="platform=iOS Simulator,name=iPhone 16"
+    fi
+    ./tools/xcode-run xcodebuild \
+      -project ios/Pika.xcodeproj \
+      -scheme Pika \
+      -configuration Debug \
+      -destination "$DEST" \
+      -derivedDataPath "$DERIVED_DATA_PATH" \
+      build \
+      -skipMacroValidation \
+      ARCHS="$SIM_ARCH" \
+      ONLY_ACTIVE_ARCH=YES \
+      CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
+      PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-org.pikachat.pika.dev}" \
+      PIKA_IOS_URL_SCHEME="${PIKA_IOS_URL_SCHEME:-pika}"
 
 # Run iOS UI tests on simulator (skips E2E deployed-bot test).
 ios-ui-test: ios-xcframework ios-xcodeproj
