@@ -1,7 +1,9 @@
 import UserNotifications
 import Foundation
+import ImageIO
 import Intents
 import Security
+import UniformTypeIdentifiers
 
 class NotificationService: UNNotificationServiceExtension {
 
@@ -47,6 +49,13 @@ class NotificationService: UNNotificationServiceExtension {
             }
             content.userInfo["chat_id"] = msg.chatId
             content.threadIdentifier = msg.chatId
+
+            // Attach decrypted image thumbnail if available.
+            if let imageData = msg.imageData {
+                if let attachment = Self.createImageAttachment(data: Data(imageData)) {
+                    content.attachments = [attachment]
+                }
+            }
 
             if let urlStr = msg.senderPictureUrl, let url = URL(string: urlStr) {
                 Self.downloadAvatar(url: url) { image in
@@ -140,6 +149,36 @@ class NotificationService: UNNotificationServiceExtension {
         interaction.donate(completion: nil)
         let updated = try? content.updating(from: intent)
         return updated ?? content
+    }
+
+    /// Save decrypted image data to a temp file and create a notification attachment.
+    private static func createImageAttachment(data: Data) -> UNNotificationAttachment? {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notif-images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+
+        // Detect the actual image type so iOS can decode it correctly.
+        var uti: String = UTType.jpeg.identifier
+        var ext: String = "jpg"
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let detectedUTI = CGImageSourceGetType(source) as String? {
+            uti = detectedUTI
+            if let type = UTType(detectedUTI), let preferred = type.preferredFilenameExtension {
+                ext = preferred
+            }
+        }
+
+        let fileURL = tmpDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
+        do {
+            try data.write(to: fileURL)
+            return try UNNotificationAttachment(
+                identifier: "image",
+                url: fileURL,
+                options: [UNNotificationAttachmentOptionsTypeHintKey: uti]
+            )
+        } catch {
+            return nil
+        }
     }
 
     /// Download an image and return it as an INImage.
