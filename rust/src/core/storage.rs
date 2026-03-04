@@ -316,6 +316,10 @@ impl AppCore {
 
         list.sort_by_key(|c| std::cmp::Reverse(c.last_message_at.unwrap_or(0)));
         if let Some(sess) = self.session.as_mut() {
+            sess.groups_by_mls_id = index
+                .iter()
+                .map(|(chat_id, entry)| (entry.mls_group_id.clone(), chat_id.clone()))
+                .collect();
             sess.groups = index;
         }
         self.state.chat_list = list;
@@ -791,6 +795,91 @@ impl AppCore {
                 self.emit_current_chat();
             }
         }
+    }
+
+    pub(super) fn search_messages(&mut self, query: &str, chat_id: Option<&str>) {
+        let query = query.trim();
+        if query.is_empty() {
+            self.state.search_results = Some(vec![]);
+            self.emit_state();
+            return;
+        }
+
+        let Some(sess) = self.session.as_ref() else {
+            self.state.search_results = Some(vec![]);
+            self.emit_state();
+            return;
+        };
+
+        let mls_group_id =
+            chat_id.and_then(|cid| sess.groups.get(cid).map(|e| e.mls_group_id.clone()));
+
+        // If chat_id was given but not found in groups, return empty.
+        if chat_id.is_some() && mls_group_id.is_none() {
+            self.state.search_results = Some(vec![]);
+            self.emit_state();
+            return;
+        }
+
+        let messages = match sess.mdk.search_messages(query, mls_group_id.as_ref(), 200) {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                tracing::warn!(%e, "search_messages failed");
+                self.state.search_results = Some(vec![]);
+                self.emit_state();
+                return;
+            }
+        };
+
+        let my_pubkey_hex = sess.pubkey.to_hex();
+
+        let results: Vec<crate::state::SearchResult> = messages
+            .iter()
+            .filter(|m| classify_app_message(m).is_some_and(|k| k.is_chat_visible()))
+            .filter_map(|m| {
+                let cid = sess.groups_by_mls_id.get(&m.mls_group_id)?;
+                let entry = sess.groups.get(cid)?;
+                let chat_name = if entry.is_group {
+                    entry
+                        .group_name
+                        .clone()
+                        .unwrap_or_else(|| format!("Group ({})", entry.members.len() + 1))
+                } else {
+                    entry
+                        .members
+                        .first()
+                        .and_then(|m| m.name.clone())
+                        .unwrap_or_else(|| {
+                            entry
+                                .members
+                                .first()
+                                .map(|m| truncated_npub(&m.pubkey.to_bech32().unwrap_or_default()))
+                                .unwrap_or_else(|| "Chat".to_string())
+                        })
+                };
+                let sender_hex = m.pubkey.to_hex();
+                let sender_name = if sender_hex == my_pubkey_hex {
+                    Some("You".to_string())
+                } else {
+                    self.profiles.get(&sender_hex).and_then(|p| p.name.clone())
+                };
+                let timestamp = m.created_at.as_secs() as i64;
+                Some(crate::state::SearchResult {
+                    message_id: m.id.to_hex(),
+                    chat_id: cid.clone(),
+                    chat_name,
+                    sender_name,
+                    sender_pubkey: sender_hex,
+                    content: m.content.clone(),
+                    timestamp,
+                    display_timestamp: format_display_timestamp(timestamp),
+                    is_group: entry.is_group,
+                })
+            })
+            .collect();
+
+        self.state.search_results = Some(results);
+        self.emit_state();
     }
 }
 
@@ -2090,5 +2179,61 @@ mod tests {
             rxns[&sender_hex].0, "👍",
             "newest reaction should win regardless of iteration order"
         );
+    }
+
+    // --- search_messages tests ---
+
+    #[test]
+    fn search_empty_query_returns_empty() {
+        let msgs = vec![make_stored_msg(
+            1,
+            Kind::ChatMessage,
+            "hello world",
+            Tags::new(),
+            100,
+        )];
+        // Empty/whitespace queries should match nothing.
+        assert!(filter_search_results(&msgs, "").is_empty());
+        assert!(filter_search_results(&msgs, "   ").is_empty());
+    }
+
+    #[test]
+    fn search_filters_non_chat_visible() {
+        let msgs = vec![
+            make_stored_msg(1, Kind::ChatMessage, "hello", Tags::new(), 100),
+            make_stored_msg(2, super::CALL_SIGNAL_KIND, "hello signal", Tags::new(), 101),
+            make_stored_msg(3, Kind::Custom(9999), "hello unknown", Tags::new(), 102),
+        ];
+        let results = filter_search_results(&msgs, "hello");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "hello");
+    }
+
+    #[test]
+    fn search_matches_substring() {
+        let msgs = vec![
+            make_stored_msg(1, Kind::ChatMessage, "hello world", Tags::new(), 100),
+            make_stored_msg(2, Kind::ChatMessage, "goodbye world", Tags::new(), 101),
+            make_stored_msg(3, Kind::ChatMessage, "unrelated", Tags::new(), 102),
+        ];
+        let results = filter_search_results(&msgs, "world");
+        assert_eq!(results.len(), 2);
+    }
+
+    /// Helper: simulates the filtering logic in search_messages without needing
+    /// a full AppCore/session. Tests the classify + content matching pipeline.
+    fn filter_search_results<'a>(
+        msgs: &'a [message_types::Message],
+        query: &str,
+    ) -> Vec<&'a message_types::Message> {
+        let query = query.trim();
+        if query.is_empty() {
+            return vec![];
+        }
+        let query_lower = query.to_lowercase();
+        msgs.iter()
+            .filter(|m| super::classify_app_message(m).is_some_and(|k| k.is_chat_visible()))
+            .filter(|m| m.content.to_lowercase().contains(&query_lower))
+            .collect()
     }
 }

@@ -209,6 +209,13 @@ pub enum AppAction {
     },
     ReregisterPush,
 
+    // Search
+    SearchMessages {
+        query: String,
+        chat_id: Option<String>,
+    },
+    ClearSearch,
+
     // Follow list
     RefreshFollowList,
     FollowUser {
@@ -307,6 +314,10 @@ impl AppAction {
             // Push notifications
             AppAction::SetPushToken { .. } => "SetPushToken",
             AppAction::ReregisterPush => "ReregisterPush",
+
+            // Search
+            AppAction::SearchMessages { .. } => "SearchMessages",
+            AppAction::ClearSearch => "ClearSearch",
 
             // Follow list
             AppAction::RefreshFollowList => "RefreshFollowList",

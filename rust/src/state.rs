@@ -7,6 +7,19 @@ pub struct CallTimelineEvent {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct SearchResult {
+    pub message_id: String,
+    pub chat_id: String,
+    pub chat_name: String,
+    pub sender_name: Option<String>,
+    pub sender_pubkey: String,
+    pub content: String,
+    pub timestamp: i64,
+    pub display_timestamp: String,
+    pub is_group: bool,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct AppState {
     pub rev: u64,
     pub router: Router,
@@ -23,6 +36,7 @@ pub struct AppState {
     pub developer_mode: bool,
     pub voice_recording: Option<VoiceRecordingState>,
     pub media_gallery: Option<MediaGalleryState>,
+    pub search_results: Option<Vec<SearchResult>>,
 }
 
 impl AppState {
@@ -46,6 +60,7 @@ impl AppState {
             developer_mode: false,
             voice_recording: None,
             media_gallery: None,
+            search_results: None,
         }
     }
 }

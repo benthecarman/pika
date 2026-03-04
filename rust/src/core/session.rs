@@ -59,6 +59,7 @@ impl AppCore {
             giftwrap_sub: None,
             group_sub: None,
             groups: HashMap::new(),
+            groups_by_mls_id: HashMap::new(),
         };
 
         self.session = Some(sess);

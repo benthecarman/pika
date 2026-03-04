@@ -2276,7 +2276,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3432,7 +3432,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4538,7 +4538,7 @@ dependencies = [
 [[package]]
 name = "mdk-core"
 version = "0.6.0"
-source = "git+https://github.com/marmot-protocol/mdk?rev=d9f372743625de17f6fcd81eecd5084917a8ebb1#d9f372743625de17f6fcd81eecd5084917a8ebb1"
+source = "git+https://github.com/benthecarman/mdk?rev=5c551d40c4e47d8f31165b194d77d3d9461b31fd#5c551d40c4e47d8f31165b194d77d3d9461b31fd"
 dependencies = [
  "blurhash",
  "chacha20poly1305",
@@ -4562,7 +4562,7 @@ dependencies = [
 [[package]]
 name = "mdk-sqlite-storage"
 version = "0.6.0"
-source = "git+https://github.com/marmot-protocol/mdk?rev=d9f372743625de17f6fcd81eecd5084917a8ebb1#d9f372743625de17f6fcd81eecd5084917a8ebb1"
+source = "git+https://github.com/benthecarman/mdk?rev=5c551d40c4e47d8f31165b194d77d3d9461b31fd#5c551d40c4e47d8f31165b194d77d3d9461b31fd"
 dependencies = [
  "getrandom 0.3.4",
  "hex",
@@ -4583,7 +4583,7 @@ dependencies = [
 [[package]]
 name = "mdk-storage-traits"
 version = "0.6.0"
-source = "git+https://github.com/marmot-protocol/mdk?rev=d9f372743625de17f6fcd81eecd5084917a8ebb1#d9f372743625de17f6fcd81eecd5084917a8ebb1"
+source = "git+https://github.com/benthecarman/mdk?rev=5c551d40c4e47d8f31165b194d77d3d9461b31fd#5c551d40c4e47d8f31165b194d77d3d9461b31fd"
 dependencies = [
  "nostr",
  "openmls",
@@ -5147,7 +5147,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6728,7 +6728,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.37",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6768,9 +6768,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7290,7 +7290,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7394,7 +7394,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8173,7 +8173,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9788,7 +9788,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

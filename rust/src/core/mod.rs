@@ -662,6 +662,8 @@ struct Session {
 
     // chat_id (hex nostr_group_id) -> group info
     groups: HashMap<String, GroupIndexEntry>,
+    // Reverse index: mls_group_id -> chat_id
+    groups_by_mls_id: HashMap<GroupId, String>,
 }
 
 pub struct AppCore {
@@ -2823,6 +2825,7 @@ impl AppCore {
             self.state.media_gallery = None;
             self.state.call_timeline = vec![];
             self.state.chat_list = vec![];
+            self.state.search_results = None;
             self.state.busy = BusyState::idle();
             self.loaded_count.clear();
             self.unread_counts.clear();
@@ -4122,7 +4125,12 @@ impl AppCore {
     }
 
     fn resolve_chat_id(&mut self, group_id: &GroupId) -> Option<String> {
-        let sess = self.session.as_mut()?;
+        let sess = self.session.as_ref()?;
+        // Fast path: use cached reverse index.
+        if let Some(chat_id) = sess.groups_by_mls_id.get(group_id) {
+            return Some(chat_id.clone());
+        }
+        // Slow path: group may be freshly welcomed and not yet indexed.
         match sess.mdk.get_group(group_id) {
             Ok(Some(group)) => Some(hex::encode(group.nostr_group_id)),
             _ => None,
@@ -4714,6 +4722,17 @@ impl AppCore {
                 self.state.peer_profile = None;
                 self.emit_state();
             }
+            AppAction::SearchMessages { query, chat_id } => {
+                if !self.is_logged_in() {
+                    return;
+                }
+                self.search_messages(&query, chat_id.as_deref());
+            }
+            AppAction::ClearSearch => {
+                self.state.search_results = None;
+                self.emit_state();
+            }
+
             AppAction::RefreshFollowList => {
                 if !self.is_logged_in() {
                     return;
@@ -6145,6 +6164,7 @@ mod tests {
                 giftwrap_sub: None,
                 group_sub: None,
                 groups: std::collections::HashMap::new(),
+                groups_by_mls_id: std::collections::HashMap::new(),
             });
 
             (core, chat_id, creator, group_id)
@@ -6732,6 +6752,7 @@ mod tests {
                 giftwrap_sub: None,
                 group_sub: None,
                 groups,
+                groups_by_mls_id: std::collections::HashMap::new(),
             });
 
             (core, chat_id, creator, group_id)
@@ -6897,6 +6918,7 @@ mod tests {
                 giftwrap_sub: None,
                 group_sub: None,
                 groups: std::collections::HashMap::new(),
+                groups_by_mls_id: std::collections::HashMap::new(),
             });
 
             (core, chat_id, creator, group_id)
@@ -7111,6 +7133,7 @@ mod tests {
                 giftwrap_sub: None,
                 group_sub: None,
                 groups: std::collections::HashMap::new(),
+                groups_by_mls_id: std::collections::HashMap::new(),
             });
             (core, tmp)
         }
@@ -7208,6 +7231,7 @@ mod tests {
                 giftwrap_sub: None,
                 group_sub: None,
                 groups: std::collections::HashMap::new(),
+                groups_by_mls_id: std::collections::HashMap::new(),
             });
             (core, tmp)
         }
@@ -7548,6 +7572,7 @@ mod tests {
             giftwrap_sub: None,
             group_sub: None,
             groups: std::collections::HashMap::new(),
+            groups_by_mls_id: std::collections::HashMap::new(),
         });
 
         // Build the initial my_profile state from the cache.
