@@ -11,6 +11,7 @@ struct GroupInfoView: View {
     let onTapMember: (@MainActor (String) -> Void)?
     let onSaveGroupProfile: @MainActor (String, String) -> Void
     let onUploadGroupProfilePhoto: @MainActor (Data, String) -> Void
+    let onOpenMediaGallery: (@MainActor () -> Void)?
     @State private var npubInput = ""
     @State private var showScanner = false
     @State private var isEditing = false
@@ -157,6 +158,20 @@ struct GroupInfoView: View {
                             .accessibilityIdentifier(TestIds.groupInfoAddButton)
                         }
                     }
+                }
+
+                Section {
+                    Button {
+                        onOpenMediaGallery?()
+                    } label: {
+                        HStack {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .foregroundStyle(.blue)
+                            Text("Photos & Videos")
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 Section {
@@ -328,7 +343,8 @@ struct GroupProfileSheet: View {
             onRenameGroup: { _ in },
             onTapMember: nil,
             onSaveGroupProfile: { _, _ in },
-            onUploadGroupProfilePhoto: { _, _ in }
+            onUploadGroupProfilePhoto: { _, _ in },
+            onOpenMediaGallery: nil
         )
     }
 }

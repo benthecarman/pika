@@ -2787,10 +2787,12 @@ impl AppCore {
         }
 
         // Prevent stacking multiple chat screens (and their child GroupInfo screens).
-        self.state
-            .router
-            .screen_stack
-            .retain(|s| !matches!(s, Screen::Chat { .. } | Screen::GroupInfo { .. }));
+        self.state.router.screen_stack.retain(|s| {
+            !matches!(
+                s,
+                Screen::Chat { .. } | Screen::GroupInfo { .. } | Screen::ChatMedia { .. }
+            )
+        });
 
         let screen = Screen::Chat {
             chat_id: chat_id.to_string(),
@@ -4647,6 +4649,16 @@ impl AppCore {
 
                 self.toast("Relay config reloaded");
             }
+            AppAction::LoadMediaGallery { chat_id } => {
+                if !self.is_logged_in() {
+                    return;
+                }
+                self.load_media_gallery(&chat_id);
+            }
+            AppAction::ClearMediaGallery => {
+                self.state.media_gallery = None;
+                self.emit_state();
+            }
             AppAction::OpenPeerProfile { pubkey } => {
                 if !self.is_logged_in() {
                     return;
@@ -5664,7 +5676,7 @@ fn prune_chat_routes(stack: &mut Vec<Screen>, chat_id: &str) {
     stack.retain(|screen| {
         !matches!(
             screen,
-            Screen::Chat { chat_id: id } | Screen::GroupInfo { chat_id: id } if id == chat_id
+            Screen::Chat { chat_id: id } | Screen::GroupInfo { chat_id: id } | Screen::ChatMedia { chat_id: id } if id == chat_id
         )
     });
 }

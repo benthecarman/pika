@@ -785,7 +785,7 @@ fn truncated_npub(s: &str) -> String {
     }
 }
 
-fn format_display_timestamp(timestamp: i64) -> String {
+pub(super) fn format_display_timestamp(timestamp: i64) -> String {
     use chrono::TimeZone;
     let display = chrono::Utc
         .timestamp_opt(timestamp, 0)

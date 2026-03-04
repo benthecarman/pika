@@ -16,6 +16,7 @@ struct ChatView: View {
     let onStartVideoCall: @MainActor () -> Void
     let onOpenCallScreen: @MainActor () -> Void
     let onGroupInfo: (@MainActor () -> Void)?
+    let onOpenMediaGallery: (@MainActor () -> Void)?
     let onTapSender: (@MainActor (String) -> Void)?
     let onReact: (@MainActor (String, String) -> Void)?
     let onTypingStarted: (@MainActor () -> Void)?
@@ -62,6 +63,7 @@ struct ChatView: View {
         onStartVideoCall: @escaping @MainActor () -> Void,
         onOpenCallScreen: @escaping @MainActor () -> Void,
         onGroupInfo: (@MainActor () -> Void)? = nil,
+        onOpenMediaGallery: (@MainActor () -> Void)? = nil,
         onTapSender: (@MainActor (String) -> Void)? = nil,
         onReact: (@MainActor (String, String) -> Void)? = nil,
         onTypingStarted: (@MainActor () -> Void)? = nil,
@@ -84,6 +86,7 @@ struct ChatView: View {
         self.onStartVideoCall = onStartVideoCall
         self.onOpenCallScreen = onOpenCallScreen
         self.onGroupInfo = onGroupInfo
+        self.onOpenMediaGallery = onOpenMediaGallery
         self.onTapSender = onTapSender
         self.onReact = onReact
         self.onTypingStarted = onTypingStarted
@@ -157,19 +160,27 @@ struct ChatView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    ChatCallToolbarButton(
-                        callForChat: callFor(chat),
-                        hasLiveCallElsewhere: hasLiveCallElsewhere(chat: chat),
-                        onStartCall: {
-                            onStartCall()
-                        },
-                        onStartVideoCall: {
-                            onStartVideoCall()
-                        },
-                        onOpenCallScreen: {
-                            onOpenCallScreen()
+                    HStack(spacing: 16) {
+                        Button {
+                            onOpenMediaGallery?()
+                        } label: {
+                            Image(systemName: "photo.on.rectangle.angled")
                         }
-                    )
+
+                        ChatCallToolbarButton(
+                            callForChat: callFor(chat),
+                            hasLiveCallElsewhere: hasLiveCallElsewhere(chat: chat),
+                            onStartCall: {
+                                onStartCall()
+                            },
+                            onStartVideoCall: {
+                                onStartVideoCall()
+                            },
+                            onOpenCallScreen: {
+                                onOpenCallScreen()
+                            }
+                        )
+                    }
                 }
             }
         }

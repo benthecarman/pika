@@ -7,7 +7,7 @@ use mdk_core::encrypted_media::types::{MediaProcessingOptions, MediaReference};
 use nostr_blossom::client::BlossomClient;
 use sha2::{Digest, Sha256};
 
-use crate::state::{ChatMediaAttachment, ChatMediaKind};
+use crate::state::{ChatMediaAttachment, ChatMediaKind, MediaGalleryItem};
 
 use super::chat_media_db::{self, ChatMediaRecord};
 use super::*;
@@ -250,6 +250,46 @@ pub(super) fn is_imeta_tag(tag: &Tag) -> bool {
     matches!(tag.kind(), TagKind::Custom(kind) if kind.as_ref() == "imeta")
 }
 
+fn resolve_mime_type(mime_type: &str, filename: &str) -> String {
+    if mime_type.trim().is_empty() {
+        mime_type_for_filename(filename)
+    } else {
+        normalized_mime_type(mime_type)
+    }
+}
+
+fn attachment_from_record(
+    data_dir: &str,
+    chat_id: &str,
+    account_pubkey: &str,
+    record: &super::chat_media_db::ChatMediaRecord,
+) -> ChatMediaAttachment {
+    let normalized_mime = resolve_mime_type(&record.mime_type, &record.filename);
+    let kind = infer_media_kind(&normalized_mime, &record.filename);
+    let local_path = path_if_exists(&media_file_path(
+        data_dir,
+        account_pubkey,
+        chat_id,
+        &record.original_hash_hex,
+        &record.filename,
+    ));
+
+    ChatMediaAttachment {
+        original_hash_hex: record.original_hash_hex.clone(),
+        encrypted_hash_hex: Some(record.encrypted_hash_hex.clone()),
+        url: record.url.clone(),
+        mime_type: normalized_mime,
+        filename: record.filename.clone(),
+        kind,
+        width: None,
+        height: None,
+        nonce_hex: record.nonce_hex.clone(),
+        scheme_version: record.scheme_version.clone(),
+        local_path,
+        upload_progress: None,
+    }
+}
+
 impl AppCore {
     fn attachment_from_reference(
         &self,
@@ -270,11 +310,7 @@ impl AppCore {
             .dimensions
             .map(|(w, h)| (Some(w), Some(h)))
             .unwrap_or((None, None));
-        let normalized_mime = if reference.mime_type.trim().is_empty() {
-            mime_type_for_filename(&reference.filename)
-        } else {
-            normalized_mime_type(&reference.mime_type)
-        };
+        let normalized_mime = resolve_mime_type(&reference.mime_type, &reference.filename);
         let kind = infer_media_kind(&normalized_mime, &reference.filename);
 
         ChatMediaAttachment {
@@ -374,11 +410,7 @@ impl AppCore {
             return;
         }
 
-        let mime_type = if mime_type.trim().is_empty() {
-            mime_type_for_filename(&filename)
-        } else {
-            normalized_mime_type(&mime_type)
-        };
+        let mime_type = resolve_mime_type(&mime_type, &filename);
 
         let caption = caption.trim().to_string();
 
@@ -1727,6 +1759,37 @@ impl AppCore {
         }
 
         self.refresh_current_chat_if_open(&pending.chat_id);
+    }
+
+    pub(super) fn load_media_gallery(&mut self, chat_id: &str) {
+        let Some(sess) = self.session.as_ref() else {
+            return;
+        };
+        let account_pubkey = sess.pubkey.to_hex();
+
+        let Some(conn) = self.chat_media_db.as_ref() else {
+            return;
+        };
+
+        let records = chat_media_db::get_all_chat_media(conn, &account_pubkey, chat_id);
+
+        let items: Vec<MediaGalleryItem> = records
+            .iter()
+            .filter_map(|record| {
+                let att = attachment_from_record(&self.data_dir, chat_id, &account_pubkey, record);
+                if !matches!(att.kind, ChatMediaKind::Image | ChatMediaKind::Video) {
+                    return None;
+                }
+                Some(MediaGalleryItem {
+                    attachment: att,
+                    timestamp: record.created_at,
+                    display_timestamp: storage::format_display_timestamp(record.created_at),
+                })
+            })
+            .collect();
+
+        self.state.media_gallery = Some(items);
+        self.emit_state();
     }
 }
 

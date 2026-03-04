@@ -265,6 +265,9 @@ private func screenView(
             onGroupInfo: {
                 manager.dispatch(.pushScreen(screen: .groupInfo(chatId: chatId)))
             },
+            onOpenMediaGallery: {
+                manager.dispatch(.pushScreen(screen: .chatMedia(chatId: chatId)))
+            },
             onTapSender: { pubkey in
                 manager.dispatch(.openPeerProfile(pubkey: pubkey))
             },
@@ -372,6 +375,9 @@ private func screenView(
                     imageBase64: data.base64EncodedString(),
                     mimeType: mimeType
                 ))
+            },
+            onOpenMediaGallery: {
+                manager.dispatch(.pushScreen(screen: .chatMedia(chatId: chatId)))
             }
         )
         .sheet(isPresented: Binding(
@@ -386,6 +392,17 @@ private func screenView(
                     onClose: { manager.dispatch(.closePeerProfile) }
                 )
             }
+        }
+    case .chatMedia(let chatId):
+        ChatMediaGalleryView(
+            chatId: chatId,
+            items: state.mediaGallery ?? []
+        )
+        .onAppear {
+            manager.dispatch(.loadMediaGallery(chatId: chatId))
+        }
+        .onDisappear {
+            manager.dispatch(.clearMediaGallery)
         }
     }
 }

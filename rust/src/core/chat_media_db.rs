@@ -18,6 +18,21 @@ pub(super) struct ChatMediaRecord {
 
 const CHAT_MEDIA_DB_FILE: &str = "chat_media.sqlite3";
 
+fn record_from_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMediaRecord> {
+    Ok(ChatMediaRecord {
+        account_pubkey: row.get(0)?,
+        chat_id: row.get(1)?,
+        original_hash_hex: row.get(2)?,
+        encrypted_hash_hex: row.get(3)?,
+        url: row.get(4)?,
+        mime_type: row.get(5)?,
+        filename: row.get(6)?,
+        nonce_hex: row.get(7)?,
+        scheme_version: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
 pub(super) fn open_chat_media_db(data_dir: &str) -> rusqlite::Result<Connection> {
     let path = Path::new(data_dir).join(CHAT_MEDIA_DB_FILE);
     let conn = Connection::open(path)?;
@@ -110,24 +125,53 @@ pub(super) fn get_chat_media(
         WHERE account_pubkey = ?1 AND chat_id = ?2 AND original_hash_hex = ?3
         "#,
         params![account_pubkey, chat_id, original_hash_hex],
-        |row| {
-            Ok(ChatMediaRecord {
-                account_pubkey: row.get(0)?,
-                chat_id: row.get(1)?,
-                original_hash_hex: row.get(2)?,
-                encrypted_hash_hex: row.get(3)?,
-                url: row.get(4)?,
-                mime_type: row.get(5)?,
-                filename: row.get(6)?,
-                nonce_hex: row.get(7)?,
-                scheme_version: row.get(8)?,
-                created_at: row.get(9)?,
-            })
-        },
+        record_from_row,
     )
     .optional()
     .ok()
     .flatten()
+}
+
+pub(super) fn get_all_chat_media(
+    conn: &Connection,
+    account_pubkey: &str,
+    chat_id: &str,
+) -> Vec<ChatMediaRecord> {
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT
+            account_pubkey,
+            chat_id,
+            original_hash_hex,
+            encrypted_hash_hex,
+            url,
+            mime_type,
+            filename,
+            nonce_hex,
+            scheme_version,
+            created_at
+        FROM chat_media
+        WHERE account_pubkey = ?1 AND chat_id = ?2
+        ORDER BY created_at DESC
+        LIMIT 500
+        "#,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(%e, "failed to prepare get_all_chat_media query");
+            return vec![];
+        }
+    };
+
+    let rows = match stmt.query_map(params![account_pubkey, chat_id], record_from_row) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%e, "failed to query get_all_chat_media");
+            return vec![];
+        }
+    };
+
+    rows.filter_map(|r| r.ok()).collect()
 }
 
 #[cfg(test)]
@@ -250,5 +294,47 @@ mod tests {
         let got = get_chat_media(&reopened, "acc-a", "chat-a", "hash-a")
             .expect("expected record after reopening database");
         assert_eq!(got.created_at, 111);
+    }
+
+    #[test]
+    fn get_all_returns_records_sorted_by_created_at_desc() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let a = sample_record("acc-a", "chat-a", "hash-1", 100);
+        let b = sample_record("acc-a", "chat-a", "hash-2", 300);
+        let c = sample_record("acc-a", "chat-a", "hash-3", 200);
+        upsert_chat_media(&conn, &a).expect("upsert a");
+        upsert_chat_media(&conn, &b).expect("upsert b");
+        upsert_chat_media(&conn, &c).expect("upsert c");
+
+        let results = get_all_chat_media(&conn, "acc-a", "chat-a");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].created_at, 300);
+        assert_eq!(results[1].created_at, 200);
+        assert_eq!(results[2].created_at, 100);
+    }
+
+    #[test]
+    fn get_all_empty_when_no_media() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let results = get_all_chat_media(&conn, "acc-a", "chat-a");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn get_all_isolated_by_account_and_chat() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        upsert_chat_media(&conn, &sample_record("acc-a", "chat-a", "hash-1", 1)).expect("upsert");
+        upsert_chat_media(&conn, &sample_record("acc-a", "chat-b", "hash-2", 2)).expect("upsert");
+        upsert_chat_media(&conn, &sample_record("acc-b", "chat-a", "hash-3", 3)).expect("upsert");
+
+        let results = get_all_chat_media(&conn, "acc-a", "chat-a");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_hash_hex, "hash-1");
     }
 }
