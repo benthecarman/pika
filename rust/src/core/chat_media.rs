@@ -858,15 +858,7 @@ impl AppCore {
             };
 
             self.pending_sends
-                .entry(chat_id.clone())
-                .or_default()
-                .insert(
-                    rumor_id_hex.clone(),
-                    PendingSend {
-                        wrapper_event: wrapper.clone(),
-                        rumor_id_hex: rumor_id_hex.clone(),
-                    },
-                );
+                .insert(&chat_id, &rumor_id_hex, &wrapper, self.profile_db.as_ref());
 
             let relays: Vec<RelayUrl> = if network_enabled {
                 sess.mdk
