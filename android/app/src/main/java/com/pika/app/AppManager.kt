@@ -3,8 +3,13 @@ package com.pika.app
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
+import android.util.Log
+import android.widget.Toast
+import android.webkit.MimeTypeMap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -21,11 +26,29 @@ import com.pika.app.rust.ExternalSignerResult
 import com.pika.app.rust.FfiApp
 import com.pika.app.rust.isValidPeerKey
 import com.pika.app.rust.MyProfileState
+import com.pika.app.rust.Screen
+import com.pika.app.rust.share.ShareAckStatus
+import com.pika.app.rust.share.ShareDispatchAck
+import com.pika.app.rust.share.ShareDispatchKind
+import com.pika.app.rust.share.ShareEnqueueRequest
+import com.pika.app.rust.share.ShareException
+import com.pika.app.rust.share.SharePayloadKind
+import com.pika.app.rust.share.shareAck
+import com.pika.app.rust.share.shareDequeueBatch
+import com.pika.app.rust.share.shareEnqueue
+import com.pika.app.rust.share.shareGc
 import java.io.File
+import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
 class AppManager private constructor(context: Context) : AppReconciler {
+    private val shareTag = "PikaShare"
+    private val shareQueueDirName = "share_queue"
+    private val shareMediaDirName = "media"
+    private val defaultShareImageMime = "image/jpeg"
+
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val secureStore = SecureAuthStore(appContext)
@@ -33,8 +56,10 @@ class AppManager private constructor(context: Context) : AppReconciler {
     private val signerRequestLock = Any()
     private val audioFocus = AndroidAudioFocusManager(appContext)
     private val rust: FfiApp
+    private val shareRootDir: String = appContext.filesDir.absolutePath
     private var lastRevApplied: ULong = 0UL
     private val listening = AtomicBoolean(false)
+    private var pendingShareDraft: PendingShareDraft? by mutableStateOf(null)
 
     var state: AppState by mutableStateOf(
         AppState(
@@ -174,13 +199,54 @@ class AppManager private constructor(context: Context) : AppReconciler {
     fun wipeLocalDataForDeveloperTools() {
         secureStore.clear()
         rust.dispatch(AppAction.WipeLocalData)
+        pendingShareDraft = null
     }
 
     fun getNsec(): String? = secureStore.load()?.nsec
 
+    fun pendingShareSelectionSummary(): String? = pendingShareDraft?.summary
+
+    fun hasPendingShareSelection(): Boolean = pendingShareDraft != null
+
+    fun dismissPendingShareSelection() {
+        pendingShareDraft = null
+    }
+
+    fun onChatListChatSelected(chatId: String) {
+        val draft = pendingShareDraft
+        if (draft == null) {
+            rust.dispatch(AppAction.OpenChat(chatId))
+            return
+        }
+
+        val request =
+            draft.toEnqueueRequest(
+                chatId = chatId,
+                clientRequestId = UUID.randomUUID().toString(),
+                createdAtMs = System.currentTimeMillis().coerceAtLeast(0).toULong(),
+            )
+        val queued =
+            runCatching {
+                shareEnqueue(rootDir = shareRootDir, request = request)
+            }
+        if (queued.isFailure) {
+            val err = queued.exceptionOrNull()
+            Log.w(shareTag, "Failed to queue incoming share", err)
+            // Exit chooser mode on failure so normal app navigation is not locked behind
+            // a stale share draft.
+            pendingShareDraft = null
+            showShareToast("Could not share item: ${describeShareError(err)}")
+            return
+        }
+
+        pendingShareDraft = null
+        processPendingShareQueue(openFirstChat = true)
+    }
+
     fun onForeground() {
         // Foreground is a lifecycle signal; Rust owns state changes and side effects.
         rust.dispatch(AppAction.Foregrounded)
+        processPendingShareQueue(openFirstChat = false)
     }
 
     fun handleIncomingIntent(intent: Intent?) {
@@ -188,6 +254,13 @@ class AppManager private constructor(context: Context) : AppReconciler {
             rust.dispatch(AppAction.CreateChat(peerNpub = npub))
             return
         }
+
+        extractIncomingShareDraft(intent)?.let { draft ->
+            pendingShareDraft = draft
+            maybePresentShareChooser()
+            return
+        }
+
         val callbackUrl = extractNostrConnectCallback(intent) ?: return
         rust.dispatch(AppAction.NostrConnectCallback(url = callbackUrl))
     }
@@ -231,6 +304,7 @@ class AppManager private constructor(context: Context) : AppReconciler {
             }
             syncSecureStoreWithAuthState()
             audioFocus.syncForCall(state.activeCall)
+            maybePresentShareChooser()
         }
     }
 
@@ -312,6 +386,242 @@ class AppManager private constructor(context: Context) : AppReconciler {
                 }
             }
         }
+    }
+
+    private fun maybePresentShareChooser() {
+        if (pendingShareDraft == null) return
+        if (state.auth !is AuthState.LoggedIn) return
+
+        val current = state.router.screenStack.lastOrNull() ?: state.router.defaultScreen
+        if (current !is Screen.ChatList) {
+            rust.dispatch(AppAction.UpdateScreenStack(emptyList()))
+        }
+    }
+
+    private fun processPendingShareQueue(openFirstChat: Boolean) {
+        if (state.auth !is AuthState.LoggedIn) return
+        // While the chooser is visible, a draft image may exist on disk but not yet be
+        // referenced by queue metadata; running GC here could delete it as an orphan.
+        if (pendingShareDraft != null) return
+
+        runCatching {
+            shareGc(rootDir = shareRootDir, nowMsOverride = 0UL)
+        }.onFailure { err ->
+            Log.w(shareTag, "Failed share queue maintenance", err)
+        }
+
+        val jobs =
+            runCatching {
+                shareDequeueBatch(rootDir = shareRootDir, nowMsOverride = 0UL, limit = 64u)
+            }.getOrElse { err ->
+                Log.w(shareTag, "Failed to dequeue shared content", err)
+                return
+            }
+
+        if (jobs.isEmpty()) return
+
+        var firstOpenedChatId: String? = null
+        for (job in jobs) {
+            when (val kind = job.kind) {
+                is ShareDispatchKind.Message -> {
+                    rust.dispatch(
+                        AppAction.SendMessage(
+                            chatId = job.chatId,
+                            content = kind.content,
+                            kind = null,
+                            replyToMessageId = null,
+                        ),
+                    )
+                }
+                is ShareDispatchKind.Media -> {
+                    rust.dispatch(
+                        AppAction.SendChatMedia(
+                            chatId = job.chatId,
+                            dataBase64 = kind.dataBase64,
+                            mimeType = kind.mimeType,
+                            filename = kind.filename,
+                            caption = kind.caption,
+                        ),
+                    )
+                }
+            }
+
+            runCatching {
+                shareAck(
+                    rootDir = shareRootDir,
+                    ack =
+                        ShareDispatchAck(
+                            itemId = job.itemId,
+                            status = ShareAckStatus.ACCEPTED_BY_CORE,
+                            errorCode = null,
+                            errorMessage = null,
+                        ),
+                )
+            }.onFailure { err ->
+                Log.w(shareTag, "Failed share queue ack for ${job.itemId}", err)
+            }
+
+            if (openFirstChat && firstOpenedChatId == null) {
+                firstOpenedChatId = job.chatId
+            }
+        }
+
+        if (openFirstChat) {
+            firstOpenedChatId?.let { rust.dispatch(AppAction.OpenChat(it)) }
+        }
+    }
+
+    private fun showShareToast(message: String) {
+        mainHandler.post {
+            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun describeShareError(err: Throwable?): String {
+        val raw = err?.message?.trim().orEmpty()
+        if (raw.isNotEmpty()) return raw
+        return err?.javaClass?.simpleName ?: "unknown error"
+    }
+
+    private fun extractIncomingShareDraft(intent: Intent?): PendingShareDraft? {
+        if (intent?.action != Intent.ACTION_SEND) return null
+
+        val sharedText =
+            intent.getCharSequenceExtra(Intent.EXTRA_TEXT)
+                ?.toString()
+                ?.trim()
+                .orEmpty()
+
+        val streamUri = streamUriFromIntent(intent)
+        if (streamUri != null) {
+            val mimeType = resolveIncomingMimeType(intent.type, streamUri)
+            if (!mimeType.startsWith("image/")) {
+                Log.i(shareTag, "Ignoring unsupported share mime type: $mimeType")
+                return null
+            }
+
+            val filename = resolveIncomingFilename(streamUri, mimeType)
+            val relativePath = saveIncomingMedia(streamUri, filename) ?: return null
+            return PendingShareDraft.Image(
+                mediaRelativePath = relativePath,
+                mediaMimeType = mimeType,
+                mediaFilename = filename,
+                composeText = sharedText,
+            )
+        }
+
+        if (sharedText.isBlank()) return null
+
+        val payloadKind =
+            if (looksLikeWebUrl(sharedText)) {
+                SharePayloadKind.URL
+            } else {
+                SharePayloadKind.TEXT
+            }
+        return PendingShareDraft.Text(
+            payloadKind = payloadKind,
+            payloadText = sharedText,
+            composeText = "",
+        )
+    }
+
+    private fun resolveIncomingMimeType(intentType: String?, streamUri: Uri): String {
+        val intentMime = intentType?.trim()?.lowercase(Locale.US).orEmpty()
+        if (intentMime.startsWith("image/")) {
+            return intentMime
+        }
+
+        val resolverMime = appContext.contentResolver.getType(streamUri)?.trim()?.lowercase(Locale.US).orEmpty()
+        if (resolverMime.startsWith("image/")) {
+            return resolverMime
+        }
+
+        return defaultShareImageMime
+    }
+
+    private fun resolveIncomingFilename(streamUri: Uri, mimeType: String): String {
+        val displayName =
+            appContext.contentResolver.query(
+                streamUri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx < 0) return@use null
+                cursor.getString(idx)
+            }
+
+        val cleanedDisplay = displayName?.trim().orEmpty()
+        val baseNameRaw =
+            if (cleanedDisplay.isNotBlank()) {
+                File(cleanedDisplay).nameWithoutExtension
+            } else {
+                "shared-image"
+            }
+        val baseName = sanitizeFilenameBase(baseNameRaw)
+        val extFromDisplay = sanitizedExtension(File(cleanedDisplay).extension)
+        val extFromMime =
+            sanitizedExtension(
+                MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType.lowercase(Locale.US)),
+            )
+        val ext = extFromDisplay ?: extFromMime ?: "jpg"
+        return "$baseName.$ext"
+    }
+
+    private fun saveIncomingMedia(streamUri: Uri, filename: String): String? {
+        val ext = sanitizedExtension(File(filename).extension) ?: "jpg"
+        val outName = "${UUID.randomUUID()}.$ext"
+        val relativePath = "$shareQueueDirName/$shareMediaDirName/$outName"
+        val outFile = File(shareRootDir, relativePath)
+        outFile.parentFile?.mkdirs()
+
+        return runCatching {
+            appContext.contentResolver.openInputStream(streamUri)?.use { input ->
+                outFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            } ?: error("no readable stream for shared media")
+
+            if (outFile.length() <= 0L) {
+                error("shared media payload is empty")
+            }
+            relativePath
+        }.onFailure { err ->
+            Log.w(shareTag, "Failed to persist shared media", err)
+            outFile.delete()
+        }.getOrNull()
+    }
+
+    private fun streamUriFromIntent(intent: Intent): Uri? {
+        @Suppress("DEPRECATION")
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }
+    }
+
+    private fun sanitizeFilenameBase(raw: String): String {
+        val cleaned =
+            raw.trim()
+                .replace("[^A-Za-z0-9._-]".toRegex(), "-")
+                .trim('-')
+        return cleaned.ifBlank { "shared-image" }
+    }
+
+    private fun sanitizedExtension(raw: String?): String? {
+        val value = raw?.trim()?.lowercase(Locale.US).orEmpty()
+        if (value.isBlank() || value.length > 12) return null
+        return if (value.all { it.isLetterOrDigit() }) value else null
+    }
+
+    private fun looksLikeWebUrl(value: String): Boolean {
+        val parsed = runCatching { Uri.parse(value.trim()) }.getOrNull() ?: return false
+        val scheme = parsed.scheme?.lowercase(Locale.US) ?: return false
+        return scheme == "http" || scheme == "https"
     }
 
     private inline fun <T> withSignerRequestLock(block: () -> T): T = synchronized(signerRequestLock) { block() }
@@ -512,5 +822,71 @@ class AppManager private constructor(context: Context) : AppReconciler {
             instance ?: synchronized(this) {
                 instance ?: AppManager(context.applicationContext).also { instance = it }
             }
+    }
+}
+
+internal sealed class PendingShareDraft {
+    abstract val summary: String
+
+    abstract fun toEnqueueRequest(
+        chatId: String,
+        clientRequestId: String,
+        createdAtMs: ULong,
+    ): ShareEnqueueRequest
+
+    data class Text(
+        val payloadKind: SharePayloadKind,
+        val payloadText: String,
+        val composeText: String,
+    ) : PendingShareDraft() {
+        override val summary: String
+            get() =
+                when (payloadKind) {
+                    SharePayloadKind.URL -> "Select a chat to share this link."
+                    else -> "Select a chat to share this text."
+                }
+
+        override fun toEnqueueRequest(
+            chatId: String,
+            clientRequestId: String,
+            createdAtMs: ULong,
+        ): ShareEnqueueRequest =
+            ShareEnqueueRequest(
+                chatId = chatId,
+                composeText = composeText,
+                payloadKind = payloadKind,
+                payloadText = payloadText,
+                mediaRelativePath = null,
+                mediaMimeType = null,
+                mediaFilename = null,
+                clientRequestId = clientRequestId,
+                createdAtMs = createdAtMs,
+            )
+    }
+
+    data class Image(
+        val mediaRelativePath: String,
+        val mediaMimeType: String,
+        val mediaFilename: String,
+        val composeText: String,
+    ) : PendingShareDraft() {
+        override val summary: String = "Select a chat to share this image."
+
+        override fun toEnqueueRequest(
+            chatId: String,
+            clientRequestId: String,
+            createdAtMs: ULong,
+        ): ShareEnqueueRequest =
+            ShareEnqueueRequest(
+                chatId = chatId,
+                composeText = composeText,
+                payloadKind = SharePayloadKind.IMAGE,
+                payloadText = null,
+                mediaRelativePath = mediaRelativePath,
+                mediaMimeType = mediaMimeType,
+                mediaFilename = mediaFilename,
+                clientRequestId = clientRequestId,
+                createdAtMs = createdAtMs,
+            )
     }
 }

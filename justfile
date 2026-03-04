@@ -377,13 +377,13 @@ e2e-local-relay:
     just ios-ui-e2e-local
     just android-ui-e2e-local
 
-# Build Rust core + NSE for the host platform.
+# Build Rust core + extension crates for the host platform.
 rust-build-host:
     set -euo pipefail; \
     PROFILE="${PIKA_RUST_PROFILE:-release}"; \
     case "$PROFILE" in \
-      release) cargo build -p pika_core -p pika-nse --release ;; \
-      debug) cargo build -p pika_core -p pika-nse ;; \
+      release) cargo build -p pika_core -p pika-nse -p pika-share --release ;; \
+      debug) cargo build -p pika_core -p pika-nse -p pika-share ;; \
       *) echo "error: unsupported PIKA_RUST_PROFILE: $PROFILE (expected debug or release)"; exit 2 ;; \
     esac
 
@@ -405,6 +405,21 @@ gen-kotlin: rust-build-host
       --out-dir android/app/src/main/java \
       --no-format \
       --config rust/uniffi.toml
+    set -euo pipefail; \
+    PROFILE="${PIKA_RUST_PROFILE:-release}"; \
+    TARGET_ROOT="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"; \
+    TARGET_DIR="$TARGET_ROOT/$PROFILE"; \
+    SHARE_LIB=""; \
+    for cand in "$TARGET_DIR/libpika_share.dylib" "$TARGET_DIR/libpika_share.so" "$TARGET_DIR/libpika_share.dll"; do \
+      if [ -f "$cand" ]; then SHARE_LIB="$cand"; break; fi; \
+    done; \
+    if [ -z "$SHARE_LIB" ]; then echo "Missing built library: $TARGET_DIR/libpika_share.*"; exit 1; fi; \
+    cargo run -q -p uniffi-bindgen -- generate \
+      --library "$SHARE_LIB" \
+      --language kotlin \
+      --out-dir android/app/src/main/java \
+      --no-format \
+      --config crates/pika-share/uniffi.toml
 
 # Cross-compile Rust core for Android (arm64, armv7, x86_64).
 
@@ -417,11 +432,18 @@ android-rust:
       release|debug) ;; \
       *) echo "error: unsupported PIKA_RUST_PROFILE: $PROFILE (expected debug or release)"; exit 2 ;; \
     esac; \
+    ndk_help="$(cargo ndk --help 2>&1 || true)"; \
+    if ! echo "$ndk_help" | grep -q -- '--platform'; then \
+      echo "error: could not determine cargo-ndk platform flag from --help output"; \
+      exit 2; \
+    fi; \
+    ndk_platform_flag="-p"; \
+    if echo "$ndk_help" | grep -q -- '-P, --platform'; then ndk_platform_flag="-P"; fi; \
     rm -rf android/app/src/main/jniLibs; \
     mkdir -p android/app/src/main/jniLibs; \
-    cmd=(cargo ndk -o android/app/src/main/jniLibs -P 26); \
+    cmd=(cargo ndk -o android/app/src/main/jniLibs "$ndk_platform_flag" 26); \
     for abi in $ABIS; do cmd+=(-t "$abi"); done; \
-    cmd+=(build -p pika_core); \
+    cmd+=(build -p pika_core -p pika-share); \
     if [ "$PROFILE" = "release" ]; then cmd+=(--release); fi; \
     "${cmd[@]}"
 
@@ -450,7 +472,14 @@ android-release:
       esac; \
     done; \
     if [ "${#cargo_args[@]}" -eq 0 ]; then echo "error: no ABI targets configured"; exit 2; fi; \
-    cargo ndk -o android/app/src/main/jniLibs -P 26 "${cargo_args[@]}" build -p pika_core --release; \
+    ndk_help="$(cargo ndk --help 2>&1 || true)"; \
+    if ! echo "$ndk_help" | grep -q -- '--platform'; then \
+      echo "error: could not determine cargo-ndk platform flag from --help output"; \
+      exit 2; \
+    fi; \
+    ndk_platform_flag="-p"; \
+    if echo "$ndk_help" | grep -q -- '-P, --platform'; then ndk_platform_flag="-P"; fi; \
+    cargo ndk -o android/app/src/main/jniLibs "$ndk_platform_flag" 26 "${cargo_args[@]}" build -p pika_core -p pika-share --release; \
     just android-local-properties; \
     ./scripts/decrypt-keystore; \
     keystore_password="$(./scripts/read-keystore-password)"; \
@@ -527,7 +556,7 @@ release VERSION:
 
 # Generate Swift bindings via UniFFI.
 ios-gen-swift: rust-build-host
-    mkdir -p ios/Bindings ios/NSEBindings
+    mkdir -p ios/Bindings ios/NSEBindings ios/ShareBindings
     set -euo pipefail; \
     PROFILE="${PIKA_RUST_PROFILE:-release}"; \
     TARGET_ROOT="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"; \
@@ -558,6 +587,21 @@ ios-gen-swift: rust-build-host
       --out-dir ios/NSEBindings \
       --config crates/pika-nse/uniffi.toml
     python3 -c 'from pathlib import Path; import re; p=Path("ios/NSEBindings/pika_nse.swift"); data=p.read_text(encoding="utf-8").replace("\r\n","\n").replace("\r","\n"); data=re.sub(r"[ \t]+$", "", data, flags=re.M); data=data.rstrip("\n")+"\n"; p.write_text(data, encoding="utf-8")'
+    set -euo pipefail; \
+    PROFILE="${PIKA_RUST_PROFILE:-release}"; \
+    TARGET_ROOT="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"; \
+    TARGET_DIR="$TARGET_ROOT/$PROFILE"; \
+    SHARE_LIB=""; \
+    for cand in "$TARGET_DIR/libpika_share.dylib" "$TARGET_DIR/libpika_share.so" "$TARGET_DIR/libpika_share.dll"; do \
+      if [ -f "$cand" ]; then SHARE_LIB="$cand"; break; fi; \
+    done; \
+    if [ -z "$SHARE_LIB" ]; then echo "Missing built library: $TARGET_DIR/libpika_share.*"; exit 1; fi; \
+    cargo run -q -p uniffi-bindgen -- generate \
+      --library "$SHARE_LIB" \
+      --language swift \
+      --out-dir ios/ShareBindings \
+      --config crates/pika-share/uniffi.toml
+    python3 -c 'from pathlib import Path; import re; p=Path("ios/ShareBindings/pika_share.swift"); data=p.read_text(encoding="utf-8").replace("\r\n","\n").replace("\r","\n"); data=re.sub(r"[ \t]+$", "", data, flags=re.M); data=data.rstrip("\n")+"\n"; p.write_text(data, encoding="utf-8")'
 
 # Cross-compile Rust core for iOS (device + simulator).
 
@@ -595,28 +639,31 @@ ios-rust:
         "${base_env[@]}" \
           SDKROOT="$SDKROOT" \
           RUSTFLAGS="-C linker=$CC_BIN -C link-arg=${MIN_FLAG}${IOS_MIN}" \
-          cargo build -p pika_core -p pika-nse --lib --target "$target" --release; \
+          cargo build -p pika_core -p pika-nse -p pika-share --lib --target "$target" --release; \
       else \
         "${base_env[@]}" \
           SDKROOT="$SDKROOT" \
           RUSTFLAGS="-C linker=$CC_BIN -C link-arg=${MIN_FLAG}${IOS_MIN}" \
-          cargo build -p pika_core -p pika-nse --lib --target "$target"; \
+          cargo build -p pika_core -p pika-nse -p pika-share --lib --target "$target"; \
       fi; \
     done
 
-# Build PikaCore.xcframework and PikaNSE.xcframework (device + simulator slices).
+# Build PikaCore.xcframework, PikaNSE.xcframework, and PikaShare.xcframework (device + simulator slices).
 ios-xcframework: ios-gen-swift ios-rust
     set -euo pipefail; \
     PROFILE="${PIKA_RUST_PROFILE:-release}"; \
     TARGETS="${PIKA_IOS_RUST_TARGETS:-aarch64-apple-ios aarch64-apple-ios-sim}"; \
-    rm -rf ios/Frameworks/PikaCore.xcframework ios/Frameworks/PikaNSE.xcframework ios/.build; \
-    mkdir -p ios/.build/headers/pika_coreFFI ios/.build/nse-headers/pika_nseFFI ios/Frameworks; \
+    rm -rf ios/Frameworks/PikaCore.xcframework ios/Frameworks/PikaNSE.xcframework ios/Frameworks/PikaShare.xcframework ios/.build; \
+    mkdir -p ios/.build/headers/pika_coreFFI ios/.build/nse-headers/pika_nseFFI ios/.build/share-headers/pika_shareFFI ios/Frameworks; \
     cp ios/Bindings/pika_coreFFI.h ios/.build/headers/pika_coreFFI/pika_coreFFI.h; \
     cp ios/Bindings/pika_coreFFI.modulemap ios/.build/headers/pika_coreFFI/module.modulemap; \
     cp ios/NSEBindings/pika_nseFFI.h ios/.build/nse-headers/pika_nseFFI/pika_nseFFI.h; \
     cp ios/NSEBindings/pika_nseFFI.modulemap ios/.build/nse-headers/pika_nseFFI/module.modulemap; \
+    cp ios/ShareBindings/pika_shareFFI.h ios/.build/share-headers/pika_shareFFI/pika_shareFFI.h; \
+    cp ios/ShareBindings/pika_shareFFI.modulemap ios/.build/share-headers/pika_shareFFI/module.modulemap; \
     cmd=(./tools/xcode-run xcodebuild -create-xcframework); \
     nse_cmd=(./tools/xcode-run xcodebuild -create-xcframework); \
+    share_cmd=(./tools/xcode-run xcodebuild -create-xcframework); \
     for target in $TARGETS; do \
       lib="target/$target/$PROFILE/libpika_core.a"; \
       if [ ! -f "$lib" ]; then echo "error: missing iOS static lib: $lib"; exit 1; fi; \
@@ -624,11 +671,16 @@ ios-xcframework: ios-gen-swift ios-rust
       nse_lib="target/$target/$PROFILE/libpika_nse.a"; \
       if [ ! -f "$nse_lib" ]; then echo "error: missing iOS static lib: $nse_lib"; exit 1; fi; \
       nse_cmd+=(-library "$nse_lib" -headers ios/.build/nse-headers); \
+      share_lib="target/$target/$PROFILE/libpika_share.a"; \
+      if [ ! -f "$share_lib" ]; then echo "error: missing iOS static lib: $share_lib"; exit 1; fi; \
+      share_cmd+=(-library "$share_lib" -headers ios/.build/share-headers); \
     done; \
     cmd+=(-output ios/Frameworks/PikaCore.xcframework); \
     "${cmd[@]}"; \
     nse_cmd+=(-output ios/Frameworks/PikaNSE.xcframework); \
-    "${nse_cmd[@]}"
+    "${nse_cmd[@]}"; \
+    share_cmd+=(-output ios/Frameworks/PikaShare.xcframework); \
+    "${share_cmd[@]}"
 
 # Generate Xcode project via xcodegen.
 ios-xcodeproj:
@@ -648,8 +700,29 @@ ios-appstore: ios-xcframework ios-xcodeproj
 
 # Build iOS app for simulator.
 ios-build-sim: ios-xcframework ios-xcodeproj
-    SIM_ARCH="${PIKA_IOS_SIM_ARCH:-arm64}"; \
-    ./tools/xcode-run xcodebuild -project ios/Pika.xcodeproj -scheme Pika -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath ios/build build -skipMacroValidation ARCHS="$SIM_ARCH" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-org.pikachat.pika.dev}" PIKA_IOS_URL_SCHEME="${PIKA_IOS_URL_SCHEME:-pika}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SIM_ARCH="${PIKA_IOS_SIM_ARCH:-arm64}"
+    DERIVED_DATA_PATH="${PIKA_IOS_DERIVED_DATA_PATH:-ios/build}"
+    CODE_SIGNING_ALLOWED="${PIKA_IOS_CODE_SIGNING_ALLOWED:-YES}"
+    if [ -n "${PIKA_IOS_SIM_UDID:-}" ]; then
+      DEST="id=${PIKA_IOS_SIM_UDID}"
+    else
+      DEST="platform=iOS Simulator,name=iPhone 16"
+    fi
+    ./tools/xcode-run xcodebuild \
+      -project ios/Pika.xcodeproj \
+      -scheme Pika \
+      -configuration Debug \
+      -destination "$DEST" \
+      -derivedDataPath "$DERIVED_DATA_PATH" \
+      build \
+      -skipMacroValidation \
+      ARCHS="$SIM_ARCH" \
+      ONLY_ACTIVE_ARCH=YES \
+      CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
+      PIKA_APP_BUNDLE_ID="${PIKA_IOS_BUNDLE_ID:-org.pikachat.pika.dev}" \
+      PIKA_IOS_URL_SCHEME="${PIKA_IOS_URL_SCHEME:-pika}"
 
 # Run iOS UI tests on simulator (skips E2E deployed-bot test).
 ios-ui-test: ios-xcframework ios-xcodeproj

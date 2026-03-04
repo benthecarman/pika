@@ -39,6 +39,11 @@ targets:
         excludes:
           - "*.h"
           - "*.modulemap"
+      - path: ShareBindings
+        excludes:
+          - "*.h"
+          - "*.modulemap"
+      - path: ShareExtension/ShareQueueManager.swift
     settings:
       base:
         PRODUCT_NAME: "$(TARGET_NAME)"
@@ -51,9 +56,12 @@ targets:
     dependencies:
       - framework: Frameworks/PikaCore.xcframework
         embed: false
+      - framework: Frameworks/PikaShare.xcframework
+        embed: false
       - package: MarkdownUI
       - package: Perception
       - target: PikaNotificationService
+      - target: PikaShareExtension
     postBuildScripts:
       - name: "Stamp build number"
         script: |
@@ -83,6 +91,36 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(PIKA_APP_BUNDLE_ID).notification-service
     dependencies:
       - framework: Frameworks/PikaNSE.xcframework
+        embed: false
+    postBuildScripts:
+      - name: "Stamp build number"
+        script: |
+          if [ -f "${PROJECT_DIR}/.build-number" ]; then
+            BUILD_NUMBER=$(cat "${PROJECT_DIR}/.build-number")
+          else
+            BUILD_NUMBER=$(date +"%Y%m%d%H%M")
+          fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}"
+        basedOnDependencyAnalysis: false
+
+  PikaShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+      - path: ShareBindings
+        excludes:
+          - "*.h"
+          - "*.modulemap"
+    settings:
+      base:
+        PRODUCT_NAME: PikaShareExtension
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: $(PIKA_APP_BUNDLE_ID).share-extension
+    dependencies:
+      - framework: Frameworks/PikaShare.xcframework
         embed: false
     postBuildScripts:
       - name: "Stamp build number"

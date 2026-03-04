@@ -113,6 +113,8 @@ final class AppManager: AppReconciler {
     /// True while we're waiting for a stored session to be restored by Rust.
     var isRestoringSession: Bool = false
     private let callAudioSession = CallAudioSessionCoordinator()
+    private var lastSharedChatCache: [ShareableChatSummary]
+    private var lastShareLoggedInFlag: Bool?
 
     init(core: AppCore, authStore: AuthStore) {
         self.core = core
@@ -121,6 +123,8 @@ final class AppManager: AppReconciler {
         let initial = core.state()
         self.state = initial
         self.lastRevApplied = initial.rev
+        self.lastSharedChatCache = []
+        self.lastShareLoggedInFlag = nil
         callAudioSession.apply(activeCall: initial.activeCall)
 
         core.listenForUpdates(reconciler: self)
@@ -151,6 +155,8 @@ final class AppManager: AppReconciler {
             }
             PushNotificationManager.shared.requestPermissionAndRegister()
         }
+
+        syncShareExtensionState(from: initial)
     }
 
     convenience init() {
@@ -250,6 +256,7 @@ final class AppManager: AppReconciler {
         }
 
         syncAuthStoreWithAuthState()
+        syncShareExtensionState(from: state)
     }
 
     func dispatch(_ action: AppAction) {
@@ -278,6 +285,7 @@ final class AppManager: AppReconciler {
 
     func logout() {
         authStore.clear()
+        clearShareExtensionState()
         dispatch(.logout)
     }
 
@@ -295,6 +303,7 @@ final class AppManager: AppReconciler {
 
     func wipeLocalDataForDeveloperTools() {
         authStore.clear()
+        clearShareExtensionState()
         ensureMigrationSentinelExists()
         dispatch(.wipeLocalData)
     }
@@ -302,12 +311,19 @@ final class AppManager: AppReconciler {
     func onForeground() {
         NSLog("[PikaAppManager] onForeground dispatching Foregrounded")
         dispatch(.foregrounded)
+        processPendingShareQueue(openFirstChat: false)
     }
 
     func onOpenURL(_ url: URL) {
         if let npub = Self.parseChatDeepLink(url) {
             NSLog("[PikaAppManager] onOpenURL dispatching CreateChat for: \(npub)")
             dispatch(.createChat(peerNpub: npub))
+            return
+        }
+
+        if Self.isShareDispatchDeepLink(url) {
+            NSLog("[PikaAppManager] onOpenURL processing pending share queue")
+            processPendingShareQueue(openFirstChat: true)
             return
         }
 
@@ -324,6 +340,10 @@ final class AppManager: AppReconciler {
         let npub = url.pathComponents.dropFirst().first ?? ""
         guard isValidPeerKey(input: npub) else { return nil }
         return npub
+    }
+
+    nonisolated static func isShareDispatchDeepLink(_ url: URL) -> Bool {
+        url.host?.lowercased() == "share-send"
     }
 
     func refreshMyProfile() {
@@ -413,6 +433,120 @@ final class AppManager: AppReconciler {
             }
         case .externalSigner:
             break
+        }
+    }
+
+    private func syncShareExtensionState(from state: AppState) {
+        let wasLoggedIn = lastShareLoggedInFlag ?? false
+        let isLoggedIn: Bool
+        switch state.auth {
+        case .loggedOut:
+            isLoggedIn = false
+        case .loggedIn:
+            isLoggedIn = true
+        }
+
+        if lastShareLoggedInFlag != isLoggedIn {
+            ShareQueueManager.setLoggedIn(isLoggedIn)
+            lastShareLoggedInFlag = isLoggedIn
+        }
+
+        let projectedChats: [ShareableChatSummary]
+        if isLoggedIn {
+            projectedChats = state.chatList.map { chat in
+                ShareableChatSummary(
+                    chatId: chat.chatId,
+                    displayName: chat.displayName,
+                    isGroup: chat.isGroup,
+                    subtitle: chat.subtitle,
+                    lastMessagePreview: chat.lastMessagePreview,
+                    lastMessageAt: chat.lastMessageAt,
+                    members: chat.members.map { member in
+                        ShareableMember(
+                            npub: member.npub,
+                            name: member.name,
+                            pictureUrl: member.pictureUrl
+                        )
+                    }
+                )
+            }
+        } else {
+            projectedChats = []
+        }
+
+        if projectedChats != lastSharedChatCache {
+            ShareQueueManager.writeChatListCache(projectedChats)
+            lastSharedChatCache = projectedChats
+        }
+
+        if isLoggedIn, !wasLoggedIn {
+            processPendingShareQueue(openFirstChat: false)
+        }
+    }
+
+    private func clearShareExtensionState() {
+        ShareQueueManager.setLoggedIn(false)
+        ShareQueueManager.writeChatListCache([])
+        lastShareLoggedInFlag = false
+        lastSharedChatCache = []
+    }
+
+    private func processPendingShareQueue(openFirstChat: Bool) {
+        guard case .loggedIn = state.auth else { return }
+        ShareQueueManager.runMaintenance()
+        let pending = ShareQueueManager.dequeueBatch()
+        guard !pending.isEmpty else { return }
+
+        var firstOpenedChatId: String?
+        for item in pending {
+            switch item.kind {
+            case .message(let content):
+                dispatch(
+                    .sendMessage(
+                        chatId: item.chatId,
+                        content: content,
+                        kind: nil,
+                        replyToMessageId: nil
+                    )
+                )
+                if openFirstChat, firstOpenedChatId == nil {
+                    firstOpenedChatId = item.chatId
+                }
+                ShareQueueManager.acknowledge(
+                    ShareDispatchAck(
+                        itemId: item.itemId,
+                        status: .acceptedByCore,
+                        errorCode: nil,
+                        errorMessage: nil
+                    )
+                )
+
+            case .media(let caption, let mimeType, let filename, let dataBase64):
+                dispatch(
+                    .sendChatMedia(
+                        chatId: item.chatId,
+                        dataBase64: dataBase64,
+                        mimeType: mimeType,
+                        filename: filename,
+                        caption: caption
+                    )
+                )
+                if openFirstChat, firstOpenedChatId == nil {
+                    firstOpenedChatId = item.chatId
+                }
+                ShareQueueManager.acknowledge(
+                    ShareDispatchAck(
+                        itemId: item.itemId,
+                        status: .acceptedByCore,
+                        errorCode: nil,
+                        errorMessage: nil
+                    )
+                )
+            }
+        }
+
+        if openFirstChat, let chatId = firstOpenedChatId {
+            dispatch(.openChat(chatId: chatId))
         }
     }
 

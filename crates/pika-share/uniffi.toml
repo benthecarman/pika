@@ -1,0 +1,6 @@
+[bindings.swift]
+module_name = "pika_share"
+
+[bindings.kotlin]
+package_name = "com.pika.app.rust.share"
+cdylib_name = "pika_share"
