@@ -253,7 +253,13 @@ fn download_and_decrypt_image(
     let manager = mdk.media_manager(mls_group_id.clone());
     let reference = manager.parse_imeta_tag(imeta_tag).ok()?;
 
-    let response = ureq::get(&reference.url).call().ok()?;
+    let agent = ureq::Agent::config_builder()
+        .https_only(true)
+        .timeout_global(Some(std::time::Duration::from_secs(8)))
+        .build()
+        .new_agent();
+
+    let response = agent.get(&reference.url).call().ok()?;
 
     // Bail if the server reports a size larger than our cap.
     if let Some(len) = response.headers().get("content-length") {

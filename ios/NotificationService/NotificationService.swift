@@ -1,7 +1,9 @@
 import UserNotifications
 import Foundation
+import ImageIO
 import Intents
 import Security
+import UniformTypeIdentifiers
 
 class NotificationService: UNNotificationServiceExtension {
 
@@ -154,10 +156,26 @@ class NotificationService: UNNotificationServiceExtension {
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("notif-images", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let fileURL = tmpDir.appendingPathComponent(UUID().uuidString + ".jpg")
+
+        // Detect the actual image type so iOS can decode it correctly.
+        var uti: String = UTType.jpeg.identifier
+        var ext: String = "jpg"
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let detectedUTI = CGImageSourceGetType(source) as String? {
+            uti = detectedUTI
+            if let type = UTType(detectedUTI), let preferred = type.preferredFilenameExtension {
+                ext = preferred
+            }
+        }
+
+        let fileURL = tmpDir.appendingPathComponent("\(UUID().uuidString).\(ext)")
         do {
             try data.write(to: fileURL)
-            return try UNNotificationAttachment(identifier: "image", url: fileURL)
+            return try UNNotificationAttachment(
+                identifier: "image",
+                url: fileURL,
+                options: [UNNotificationAttachmentOptionsTypeHintKey: uti]
+            )
         } catch {
             return nil
         }
