@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.Log
+import android.widget.Toast
 import android.webkit.MimeTypeMap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -218,18 +219,23 @@ class AppManager private constructor(context: Context) : AppReconciler {
             return
         }
 
+        val request =
+            draft.toEnqueueRequest(
+                chatId = chatId,
+                clientRequestId = UUID.randomUUID().toString(),
+                createdAtMs = System.currentTimeMillis().coerceAtLeast(0).toULong(),
+            )
         val queued =
             runCatching {
-                val request =
-                    draft.toEnqueueRequest(
-                        chatId = chatId,
-                        clientRequestId = UUID.randomUUID().toString(),
-                        createdAtMs = System.currentTimeMillis().coerceAtLeast(0).toULong(),
-                    )
                 shareEnqueue(rootDir = shareRootDir, request = request)
             }
         if (queued.isFailure) {
-            Log.w(shareTag, "Failed to queue incoming share", queued.exceptionOrNull())
+            val err = queued.exceptionOrNull()
+            Log.w(shareTag, "Failed to queue incoming share", err)
+            // Exit chooser mode on failure so normal app navigation is not locked behind
+            // a stale share draft.
+            pendingShareDraft = null
+            showShareToast("Could not share item: ${describeShareError(err)}")
             return
         }
 
@@ -394,6 +400,9 @@ class AppManager private constructor(context: Context) : AppReconciler {
 
     private fun processPendingShareQueue(openFirstChat: Boolean) {
         if (state.auth !is AuthState.LoggedIn) return
+        // While the chooser is visible, a draft image may exist on disk but not yet be
+        // referenced by queue metadata; running GC here could delete it as an orphan.
+        if (pendingShareDraft != null) return
 
         runCatching {
             shareGc(rootDir = shareRootDir, nowMsOverride = 0UL)
@@ -460,6 +469,18 @@ class AppManager private constructor(context: Context) : AppReconciler {
         if (openFirstChat) {
             firstOpenedChatId?.let { rust.dispatch(AppAction.OpenChat(it)) }
         }
+    }
+
+    private fun showShareToast(message: String) {
+        mainHandler.post {
+            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun describeShareError(err: Throwable?): String {
+        val raw = err?.message?.trim().orEmpty()
+        if (raw.isNotEmpty()) return raw
+        return err?.javaClass?.simpleName ?: "unknown error"
     }
 
     private fun extractIncomingShareDraft(intent: Intent?): PendingShareDraft? {

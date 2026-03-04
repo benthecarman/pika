@@ -136,3 +136,7 @@ The share surface runs in constrained, separate OS contexts. It must not instant
 - This is a bounded mini-RMP adapter, not a mini full-app runtime.
 - Native owns OS lifecycle/UI; Rust owns share queue policy/state.
 - At-least-once semantics are intentional for extension reliability and simplicity.
+
+## Current Known Limitation (Android)
+
+- In current Phase 2 behavior, after selecting a recipient from Android share flow, navigation into the target chat can be delayed while state catches up. Share enqueue/send succeeds, but immediate post-send routing UX is not yet polished to parity with iOS.
