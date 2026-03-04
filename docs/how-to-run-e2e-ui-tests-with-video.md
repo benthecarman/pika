@@ -43,6 +43,22 @@ Run:
 nix develop -c env PIKA_UI_E2E_RECORD_VIDEO=1 KEEP=1 just android-ui-e2e-local
 ```
 
+## iOS: Run Specific E2E Methods
+
+Use `PIKA_IOS_E2E_TEST_METHOD` to run a single test, for example multi-image grid only:
+
+```bash
+PIKA_UI_E2E_RECORD_VIDEO=1 KEEP=1 \
+  PIKA_IOS_E2E_TEST_METHOD=testE2E_multiImageGrid \
+  just ios-ui-e2e-local
+```
+
+Or ping-pong only:
+
+```bash
+PIKA_IOS_E2E_TEST_METHOD=testE2E_deployedRustBot_pingPong just ios-ui-e2e-local
+```
+
 ## Android: Run Specific E2E Methods
 
 Use `PIKA_ANDROID_E2E_TEST_CLASS` to limit runtime, for example ping-only:

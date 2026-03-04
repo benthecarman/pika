@@ -756,6 +756,101 @@ final class PikaUITests: XCTestCase {
         XCTAssertTrue(copied.waitForExistence(timeout: 5), "Copied indicator should appear after tapping copy")
     }
 
+    func testE2E_multiImageGrid() throws {
+        let env = ProcessInfo.processInfo.environment
+        let dotenv = loadDotenv()
+        let botNpub = env["PIKA_UI_E2E_BOT_NPUB"] ?? dotenv["PIKA_UI_E2E_BOT_NPUB"] ?? ""
+        let testNsec = env["PIKA_UI_E2E_NSEC"]
+            ?? env["PIKA_TEST_NSEC"]
+            ?? dotenv["PIKA_UI_E2E_NSEC"]
+            ?? dotenv["PIKA_TEST_NSEC"]
+            ?? ""
+        let relays = env["PIKA_UI_E2E_RELAYS"] ?? dotenv["PIKA_UI_E2E_RELAYS"] ?? ""
+        let kpRelays = env["PIKA_UI_E2E_KP_RELAYS"] ?? dotenv["PIKA_UI_E2E_KP_RELAYS"] ?? ""
+
+        if botNpub.isEmpty { XCTFail("Missing env var: PIKA_UI_E2E_BOT_NPUB"); return }
+        if testNsec.isEmpty { XCTFail("Missing env var: PIKA_UI_E2E_NSEC (or PIKA_TEST_NSEC)"); return }
+        if relays.isEmpty { XCTFail("Missing env var: PIKA_UI_E2E_RELAYS"); return }
+        if kpRelays.isEmpty { XCTFail("Missing env var: PIKA_UI_E2E_KP_RELAYS"); return }
+
+        let app = XCUIApplication()
+        app.launchEnvironment["PIKA_UI_TEST_RESET"] = "1"
+        app.launchEnvironment["PIKA_RELAY_URLS"] = relays
+        app.launchEnvironment["PIKA_KEY_PACKAGE_RELAY_URLS"] = kpRelays
+        app.launch()
+
+        // Login.
+        let createAccount = app.buttons.matching(identifier: "login_create_account").firstMatch
+        if createAccount.waitForExistence(timeout: 5) {
+            if !testNsec.isEmpty {
+                let loginNsec = app.secureTextFields.matching(identifier: "login_nsec_input").firstMatch
+                let loginSubmit = app.buttons.matching(identifier: "login_submit").firstMatch
+                XCTAssertTrue(loginNsec.waitForExistence(timeout: 5))
+                XCTAssertTrue(loginSubmit.waitForExistence(timeout: 5))
+                loginNsec.tap()
+                loginNsec.typeText(testNsec)
+                loginSubmit.tap()
+            } else {
+                createAccount.tap()
+            }
+        }
+
+        // Chat list.
+        let chatsNavBar = app.navigationBars["Chats"]
+        XCTAssertTrue(chatsNavBar.waitForExistence(timeout: 10))
+
+        // Start chat with bot.
+        openNewChatFromChatList(app, timeout: 10)
+
+        let peer = app.descendants(matching: .any).matching(identifier: "newchat_peer_npub").firstMatch
+        XCTAssertTrue(peer.waitForExistence(timeout: 10))
+        peer.tap()
+        peer.typeText(botNpub)
+
+        let start = app.buttons.matching(identifier: "newchat_start").firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        start.tap()
+
+        // Wait for chat creation.
+        let composerDeadline = Date().addingTimeInterval(10)
+        var chatCreationFailed = false
+        let msgField = app.textViews.matching(identifier: "chat_message_input").firstMatch
+        let msgFieldFallback = app.textFields.matching(identifier: "chat_message_input").firstMatch
+        while Date() < composerDeadline {
+            if msgField.exists || msgFieldFallback.exists { break }
+            if let errorMsg = dismissPikaToastIfPresent(app, timeout: 0.5) {
+                if errorMsg.lowercased().contains("failed") ||
+                    errorMsg.lowercased().contains("invalid peer key package") ||
+                    errorMsg.lowercased().contains("could not find peer key package")
+                {
+                    XCTFail("E2E failed during chat creation: \(errorMsg)")
+                    chatCreationFailed = true
+                    break
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        if chatCreationFailed { return }
+
+        let composer = msgField.exists ? msgField : msgFieldFallback
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+
+        // Ask the bot to send 3 images.
+        composer.tap()
+        composer.typeText("media_batch:3")
+
+        let send = app.buttons.matching(identifier: "chat_send").firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 10))
+        send.tap()
+
+        // Wait for the media grid to appear (bot encrypts, uploads, and sends images).
+        let mediaGrid = app.descendants(matching: .any).matching(identifier: "chat_media_grid").firstMatch
+        XCTAssertTrue(
+            mediaGrid.waitForExistence(timeout: 30),
+            "Media grid should appear after bot sends multi-image message"
+        )
+    }
+
     /// Prove that a pika://chat/<npub> deep-link URL — the same content encoded
     /// in the CLI QR code — is correctly normalised by the UniFFI bridge and
     /// creates a working chat. This exercises the in-app scanner path: the QR

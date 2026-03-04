@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use clap::Subcommand;
+use mdk_core::encrypted_media::types::MediaProcessingOptions;
 use mdk_core::prelude::*;
+use nostr_blossom::client::BlossomClient;
 use nostr_sdk::prelude::*;
 use pika_marmot_runtime::{PikaMdk, load_or_create_keys, new_mdk};
 use rand::RngCore;
@@ -1225,6 +1227,50 @@ async fn bot_main(
                     continue;
                 }
 
+                // Media batch probe: send N test images back.
+                if let Some(count) = parse_media_batch_probe(&msg.content) {
+                    println!(
+                        "[openclaw_bot] media_batch probe count={count} for probe={}",
+                        msg.content.trim()
+                    );
+                    match send_test_media_batch(
+                        &mdk,
+                        &keys,
+                        &client,
+                        relay_url.clone(),
+                        &msg.mls_group_id,
+                        count,
+                    )
+                    .await
+                    {
+                        Ok(event_id) => {
+                            println!(
+                                "[openclaw_bot] ok sent media_batch count={count} event_id={event_id}"
+                            );
+                        }
+                        Err(e) => {
+                            warn!("[openclaw_bot] media_batch failed: {e:#}");
+                            // Send a text reply so the test knows it failed.
+                            let err_rumor = EventBuilder::new(
+                                Kind::ChatMessage,
+                                format!("media_batch_error:{e}"),
+                            )
+                            .build(keys.public_key());
+                            let err_event = mdk
+                                .create_message(&msg.mls_group_id, err_rumor)
+                                .context("bot create_message (media_batch_error)")?;
+                            publish_and_confirm(
+                                &client,
+                                relay_url.clone(),
+                                &err_event,
+                                "bot_media_batch_error",
+                            )
+                            .await?;
+                        }
+                    }
+                    continue;
+                }
+
                 let Some(reply) = parse_openclaw_prompt(&msg.content) else {
                     continue;
                 };
@@ -1359,6 +1405,135 @@ fn parse_hypernote_probe(content: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Parse `media_batch:<count>` probe. Returns the count (1..=8).
+fn parse_media_batch_probe(content: &str) -> Option<usize> {
+    let trimmed = content.trim();
+    let count_str = trimmed.strip_prefix("media_batch:")?;
+    let count: usize = count_str.parse().ok()?;
+    if count == 0 || count > 8 {
+        return None;
+    }
+    Some(count)
+}
+
+/// Fixture image filenames in `fixtures/test-images/`, cycled for counts > 8.
+const TEST_IMAGE_NAMES: &[&str] = &[
+    "red.jpg",
+    "green.jpg",
+    "blue.jpg",
+    "yellow.jpg",
+    "magenta.jpg",
+    "cyan.jpg",
+    "orange.jpg",
+    "purple.jpg",
+];
+
+/// Read test images from `fixtures/test-images/`, encrypt, upload to blossom,
+/// and send as a multi-media chat message.
+async fn send_test_media_batch(
+    mdk: &PikaMdk,
+    keys: &Keys,
+    client: &Client,
+    relay_url: RelayUrl,
+    mls_group_id: &GroupId,
+    count: usize,
+) -> anyhow::Result<String> {
+    // Locate fixtures/test-images relative to the workspace root.
+    // The bot is always launched with `cargo run -p pikachat` from the workspace root,
+    // so current_dir or CARGO_MANIFEST_DIR work. We try CARGO_MANIFEST_DIR first
+    // (points to cli/), then fall back to cwd.
+    let fixtures_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map(|d| {
+            Path::new(&d)
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("fixtures/test-images")
+        })
+        .unwrap_or_else(|_| Path::new("fixtures/test-images").to_path_buf());
+
+    let upload_servers = pika_relay_profiles::blossom_servers_or_default(&[]);
+    let manager = mdk.media_manager(mls_group_id.clone());
+    let mut imeta_tags = Vec::new();
+
+    for i in 0..count {
+        let img_name = TEST_IMAGE_NAMES[i % TEST_IMAGE_NAMES.len()];
+        let img_path = fixtures_dir.join(img_name);
+        let jpeg_bytes = std::fs::read(&img_path)
+            .with_context(|| format!("read test image {}", img_path.display()))?;
+        let filename = img_name.to_string();
+
+        let mut upload = manager
+            .encrypt_for_upload_with_options(
+                &jpeg_bytes,
+                "image/jpeg",
+                &filename,
+                &MediaProcessingOptions::default(),
+            )
+            .context("encrypt test image")?;
+        let encrypted_data = std::mem::take(&mut upload.encrypted_data);
+        let expected_hash_hex = hex::encode(upload.encrypted_hash);
+
+        // Upload to blossom.
+        let mut uploaded_url: Option<String> = None;
+        let mut last_error: Option<String> = None;
+        for server in &upload_servers {
+            let base_url = match url::Url::parse(server) {
+                Ok(url) => url,
+                Err(e) => {
+                    last_error = Some(format!("{server}: {e}"));
+                    continue;
+                }
+            };
+            let blossom = BlossomClient::new(base_url);
+            let descriptor = match blossom
+                .upload_blob(
+                    encrypted_data.clone(),
+                    Some(upload.mime_type.clone()),
+                    None,
+                    Some(keys),
+                )
+                .await
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    last_error = Some(format!("{server}: {e}"));
+                    continue;
+                }
+            };
+            let descriptor_hash_hex = descriptor.sha256.to_string();
+            if !descriptor_hash_hex.eq_ignore_ascii_case(&expected_hash_hex) {
+                last_error = Some(format!(
+                    "{server}: hash mismatch (expected {expected_hash_hex}, got {descriptor_hash_hex})"
+                ));
+                continue;
+            }
+            uploaded_url = Some(descriptor.url.to_string());
+            break;
+        }
+        let url = uploaded_url.ok_or_else(|| {
+            anyhow!(
+                "blossom upload failed for test image {i}: {}",
+                last_error.unwrap_or_else(|| "no servers".into())
+            )
+        })?;
+
+        let imeta_tag = manager.create_imeta_tag(&upload, &url);
+        imeta_tags.push(imeta_tag);
+    }
+
+    // Build and send the chat message with all imeta tags.
+    let mut builder = EventBuilder::new(Kind::ChatMessage, format!("media_batch_sent:{count}"));
+    for tag in &imeta_tags {
+        builder = builder.tag(tag.clone());
+    }
+    let rumor = builder.build(keys.public_key());
+    let event = mdk
+        .create_message(mls_group_id, rumor)
+        .context("bot create_message (media_batch)")?;
+    publish_and_confirm(client, relay_url, &event, "bot_media_batch").await?;
+    Ok(event.id.to_hex())
 }
 
 async fn connect_client(keys: &Keys, relay: &str) -> anyhow::Result<Client> {

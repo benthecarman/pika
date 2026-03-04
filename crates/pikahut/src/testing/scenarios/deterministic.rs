@@ -934,8 +934,24 @@ pub async fn run_ui_e2e_local(args: UiE2eLocalRequest) -> Result<ScenarioRunOutp
                 None
             };
 
-            let ios_ui_result = runner.run(
-                &CommandSpec::new(root.join("tools/xcode-run").to_string_lossy().to_string())
+            // Allow running a single test method via PIKA_IOS_E2E_TEST_METHOD env var.
+            // e.g. PIKA_IOS_E2E_TEST_METHOD=testE2E_multiImageGrid just ios-ui-e2e-local
+            let default_ios_tests = vec![
+                "testE2E_deployedRustBot_pingPong".to_string(),
+                "testE2E_hypernoteDetailsAndCodeBlock".to_string(),
+                "testE2E_multiImageGrid".to_string(),
+            ];
+            let ios_test_methods = match std::env::var("PIKA_IOS_E2E_TEST_METHOD") {
+                Ok(method) if !method.is_empty() => vec![method],
+                _ => default_ios_tests,
+            };
+            let only_testing_args: Vec<String> = ios_test_methods
+                .iter()
+                .map(|m| format!("-only-testing:PikaUITests/PikaUITests/{m}"))
+                .collect();
+
+            let mut xcode_spec =
+                CommandSpec::new(root.join("tools/xcode-run").to_string_lossy().to_string())
                     .cwd(&root)
                     .env("PIKA_UI_E2E", "1")
                     .env("PIKA_UI_E2E_BOT_NPUB", &bot_npub)
@@ -946,15 +962,11 @@ pub async fn run_ui_e2e_local(args: UiE2eLocalRequest) -> Result<ScenarioRunOutp
                     .args(["-project", "ios/Pika.xcodeproj", "-scheme", "Pika"])
                     .arg("-destination")
                     .arg(format!("id={udid}"))
-                    .args([
-                        "test",
-                        "CODE_SIGNING_ALLOWED=NO",
-                        "EXCLUDED_ARCHS=x86_64",
-                        "-only-testing:PikaUITests/PikaUITests/testE2E_deployedRustBot_pingPong",
-                        "-only-testing:PikaUITests/PikaUITests/testE2E_hypernoteDetailsAndCodeBlock",
-                    ])
-                    .capture_name("ios-ui-e2e-local"),
-            );
+                    .args(["test", "CODE_SIGNING_ALLOWED=NO", "EXCLUDED_ARCHS=x86_64"]);
+            for arg in &only_testing_args {
+                xcode_spec = xcode_spec.arg(arg);
+            }
+            let ios_ui_result = runner.run(&xcode_spec.capture_name("ios-ui-e2e-local"));
 
             if let Some(recorder) = ios_video_recorder {
                 let _ = runner.run(

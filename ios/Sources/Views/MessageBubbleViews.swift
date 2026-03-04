@@ -649,6 +649,7 @@ private struct MessageBubble: View {
             }
         }
         .frame(height: mediaGridHeight(count: attachments.count, cellHeight: cellHeight, spacing: spacing))
+        .accessibilityIdentifier(TestIds.chatMediaGrid)
     }
 
     private func mediaGridHeight(count: Int, cellHeight: CGFloat, spacing: CGFloat) -> CGFloat {
