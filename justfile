@@ -405,6 +405,21 @@ gen-kotlin: rust-build-host
       --out-dir android/app/src/main/java \
       --no-format \
       --config rust/uniffi.toml
+    set -euo pipefail; \
+    PROFILE="${PIKA_RUST_PROFILE:-release}"; \
+    TARGET_ROOT="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"; \
+    TARGET_DIR="$TARGET_ROOT/$PROFILE"; \
+    SHARE_LIB=""; \
+    for cand in "$TARGET_DIR/libpika_share.dylib" "$TARGET_DIR/libpika_share.so" "$TARGET_DIR/libpika_share.dll"; do \
+      if [ -f "$cand" ]; then SHARE_LIB="$cand"; break; fi; \
+    done; \
+    if [ -z "$SHARE_LIB" ]; then echo "Missing built library: $TARGET_DIR/libpika_share.*"; exit 1; fi; \
+    cargo run -q -p uniffi-bindgen -- generate \
+      --library "$SHARE_LIB" \
+      --language kotlin \
+      --out-dir android/app/src/main/java \
+      --no-format \
+      --config crates/pika-share/uniffi.toml
 
 # Cross-compile Rust core for Android (arm64, armv7, x86_64).
 
@@ -417,11 +432,18 @@ android-rust:
       release|debug) ;; \
       *) echo "error: unsupported PIKA_RUST_PROFILE: $PROFILE (expected debug or release)"; exit 2 ;; \
     esac; \
+    ndk_help="$(cargo ndk --help 2>&1 || true)"; \
+    if ! echo "$ndk_help" | grep -q -- '--platform'; then \
+      echo "error: could not determine cargo-ndk platform flag from --help output"; \
+      exit 2; \
+    fi; \
+    ndk_platform_flag="-p"; \
+    if echo "$ndk_help" | grep -q -- '-P, --platform'; then ndk_platform_flag="-P"; fi; \
     rm -rf android/app/src/main/jniLibs; \
     mkdir -p android/app/src/main/jniLibs; \
-    cmd=(cargo ndk -o android/app/src/main/jniLibs -P 26); \
+    cmd=(cargo ndk -o android/app/src/main/jniLibs "$ndk_platform_flag" 26); \
     for abi in $ABIS; do cmd+=(-t "$abi"); done; \
-    cmd+=(build -p pika_core); \
+    cmd+=(build -p pika_core -p pika-share); \
     if [ "$PROFILE" = "release" ]; then cmd+=(--release); fi; \
     "${cmd[@]}"
 
@@ -450,7 +472,14 @@ android-release:
       esac; \
     done; \
     if [ "${#cargo_args[@]}" -eq 0 ]; then echo "error: no ABI targets configured"; exit 2; fi; \
-    cargo ndk -o android/app/src/main/jniLibs -P 26 "${cargo_args[@]}" build -p pika_core --release; \
+    ndk_help="$(cargo ndk --help 2>&1 || true)"; \
+    if ! echo "$ndk_help" | grep -q -- '--platform'; then \
+      echo "error: could not determine cargo-ndk platform flag from --help output"; \
+      exit 2; \
+    fi; \
+    ndk_platform_flag="-p"; \
+    if echo "$ndk_help" | grep -q -- '-P, --platform'; then ndk_platform_flag="-P"; fi; \
+    cargo ndk -o android/app/src/main/jniLibs "$ndk_platform_flag" 26 "${cargo_args[@]}" build -p pika_core -p pika-share --release; \
     just android-local-properties; \
     ./scripts/decrypt-keystore; \
     keystore_password="$(./scripts/read-keystore-password)"; \

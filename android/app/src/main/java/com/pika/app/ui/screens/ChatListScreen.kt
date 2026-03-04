@@ -23,6 +23,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -54,6 +55,8 @@ import androidx.compose.material.icons.filled.GroupAdd
 fun ChatListScreen(manager: AppManager, padding: PaddingValues) {
     var showMyProfile by remember { mutableStateOf(false) }
     val myProfile = manager.state.myProfile
+    val shareSummary = manager.pendingShareSelectionSummary()
+    val isShareSelectionMode = shareSummary != null
     val myNpub =
         when (val a = manager.state.auth) {
             is AuthState.LoggedIn -> a.npub
@@ -64,7 +67,7 @@ fun ChatListScreen(manager: AppManager, padding: PaddingValues) {
         modifier = Modifier.padding(padding),
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("Chats") },
+                title = { Text(if (isShareSelectionMode) "Choose Chat" else "Chats") },
                 colors =
                     TopAppBarDefaults.centerAlignedTopAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
@@ -85,11 +88,17 @@ fun ChatListScreen(manager: AppManager, padding: PaddingValues) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { manager.dispatch(AppAction.PushScreen(Screen.NewChat)) }) {
-                        Icon(Icons.Default.Add, contentDescription = "New Chat")
-                    }
-                    IconButton(onClick = { manager.dispatch(AppAction.PushScreen(Screen.NewGroupChat)) }) {
-                        Icon(Icons.Default.GroupAdd, contentDescription = "New Group")
+                    if (isShareSelectionMode) {
+                        TextButton(onClick = { manager.dismissPendingShareSelection() }) {
+                            Text("Cancel")
+                        }
+                    } else {
+                        IconButton(onClick = { manager.dispatch(AppAction.PushScreen(Screen.NewChat)) }) {
+                            Icon(Icons.Default.Add, contentDescription = "New Chat")
+                        }
+                        IconButton(onClick = { manager.dispatch(AppAction.PushScreen(Screen.NewGroupChat)) }) {
+                            Icon(Icons.Default.GroupAdd, contentDescription = "New Group")
+                        }
                     }
                 },
             )
@@ -99,43 +108,63 @@ fun ChatListScreen(manager: AppManager, padding: PaddingValues) {
             modifier = Modifier.padding(inner),
             contentPadding = PaddingValues(vertical = 6.dp),
         ) {
+            if (shareSummary != null) {
+                item {
+                    PendingShareBanner(summary = shareSummary)
+                }
+            }
             items(manager.state.chatList, key = { it.chatId }) { chat ->
-                val dismissState =
-                    rememberSwipeToDismissBoxState(
-                        positionalThreshold = { distance -> distance * 0.25f },
-                        confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
-                                manager.dispatch(AppAction.ArchiveChat(chat.chatId))
-                                // Keep the row from getting visually "stuck" in a dismissed offset.
-                                // The row will disappear when Rust state removes it from chatList.
-                                false
-                            } else {
-                                false
+                if (isShareSelectionMode) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface),
+                    ) {
+                        ChatRow(
+                            chat = chat,
+                            onClick = { manager.onChatListChatSelected(chat.chatId) },
+                        )
+                    }
+                } else {
+                    val dismissState =
+                        rememberSwipeToDismissBoxState(
+                            positionalThreshold = { distance -> distance * 0.25f },
+                            confirmValueChange = { value ->
+                                if (value == SwipeToDismissBoxValue.EndToStart) {
+                                    manager.dispatch(AppAction.ArchiveChat(chat.chatId))
+                                    // Keep the row from getting visually "stuck" in a dismissed offset.
+                                    // The row will disappear when Rust state removes it from chatList.
+                                    false
+                                } else {
+                                    false
+                                }
+                            },
+                        )
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        enableDismissFromStartToEnd = false,
+                        enableDismissFromEndToStart = true,
+                        backgroundContent = {
+                            if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
+                                ArchiveSwipeBackground()
+                            }
+                        },
+                        content = {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surface),
+                            ) {
+                                ChatRow(
+                                    chat = chat,
+                                    onClick = { manager.onChatListChatSelected(chat.chatId) },
+                                )
                             }
                         },
                     )
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    enableDismissFromEndToStart = true,
-                    backgroundContent = {
-                        if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
-                            ArchiveSwipeBackground()
-                        }
-                    },
-                    content = {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface),
-                        ) {
-                            ChatRow(
-                                chat = chat,
-                                onClick = { manager.dispatch(AppAction.OpenChat(chat.chatId)) },
-                            )
-                        }
-                    },
-                )
+                }
             }
         }
     }
@@ -145,6 +174,25 @@ fun ChatListScreen(manager: AppManager, padding: PaddingValues) {
             manager = manager,
             npub = myNpub,
             onDismiss = { showMyProfile = false },
+        )
+    }
+}
+
+@Composable
+private fun PendingShareBanner(summary: String) {
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Text(
+            text = summary,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
     }
 }
