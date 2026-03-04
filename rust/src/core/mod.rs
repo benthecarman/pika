@@ -476,6 +476,9 @@ impl PendingSends {
     fn remove(&mut self, chat_id: &str, rumor_id: &str, db: Option<&rusqlite::Connection>) {
         if let Some(m) = self.map.get_mut(chat_id) {
             m.remove(rumor_id);
+            if m.is_empty() {
+                self.map.remove(chat_id);
+            }
         }
         if let Some(conn) = db {
             profile_db::remove_pending_send(conn, rumor_id);
