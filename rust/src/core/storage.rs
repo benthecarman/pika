@@ -799,45 +799,53 @@ impl AppCore {
 
     pub(super) fn search_messages(&mut self, query: &str, chat_id: Option<&str>) {
         let query = query.trim();
+        tracing::info!(query, ?chat_id, "search_messages called");
         if query.is_empty() {
             self.state.search_results = Some(vec![]);
             self.emit_state();
             return;
         }
 
-        let Some(sess) = self.session.as_ref() else {
-            self.state.search_results = Some(vec![]);
-            self.emit_state();
-            return;
-        };
+        let (messages, groups_count) = {
+            let Some(sess) = self.session.as_ref() else {
+                self.state.search_results = Some(vec![]);
+                self.emit_state();
+                return;
+            };
 
-        let mls_group_id =
-            chat_id.and_then(|cid| sess.groups.get(cid).map(|e| e.mls_group_id.clone()));
+            let mls_group_id =
+                chat_id.and_then(|cid| sess.groups.get(cid).map(|e| e.mls_group_id.clone()));
 
-        // If chat_id was given but not found in groups, return empty.
-        if chat_id.is_some() && mls_group_id.is_none() {
-            self.state.search_results = Some(vec![]);
-            self.emit_state();
-            return;
-        }
-
-        let messages = match sess.mdk.search_messages(query, mls_group_id.as_ref(), 200) {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                tracing::warn!(%e, "search_messages failed");
+            // If chat_id was given but not found in groups, return empty.
+            if chat_id.is_some() && mls_group_id.is_none() {
                 self.state.search_results = Some(vec![]);
                 self.emit_state();
                 return;
             }
+
+            let mdk_result = sess.mdk.search_messages(query, mls_group_id.as_ref(), 200);
+            let groups_count = sess.groups_by_mls_id.len();
+            match mdk_result {
+                Ok(msgs) => (msgs, groups_count),
+                Err(e) => {
+                    let _ = sess;
+                    self.toast(format!("search err: {e}"));
+                    self.state.search_results = Some(vec![]);
+                    self.emit_state();
+                    return;
+                }
+            }
         };
 
-        tracing::info!(
-            query,
-            mdk_results = messages.len(),
-            groups_index_size = sess.groups_by_mls_id.len(),
-            "search_messages: MDK returned results"
-        );
+        self.toast(format!(
+            "mdk: {} results, {} groups",
+            messages.len(),
+            groups_count
+        ));
 
+        let Some(sess) = self.session.as_ref() else {
+            return;
+        };
         let my_pubkey_hex = sess.pubkey.to_hex();
 
         let results: Vec<crate::state::SearchResult> = messages
