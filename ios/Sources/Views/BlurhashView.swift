@@ -103,8 +103,10 @@ extension UIImage {
             }
         }
 
+        guard size.width.isFinite, size.height.isFinite else { return nil }
         let width = Int(size.width)
         let height = Int(size.height)
+        guard width > 0, height > 0 else { return nil }
 
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
 

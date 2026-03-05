@@ -1386,8 +1386,8 @@ private fun MediaGrid(
                                     Box(
                                         modifier = Modifier
                                             .matchParentSize()
-                                            .background(Color.Black.copy(alpha = 0.5f))
-                                            .clip(RoundedCornerShape(8.dp)),
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color.Black.copy(alpha = 0.5f)),
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Text(

@@ -12,7 +12,7 @@ Takes an optional PR number argument; defaults to the current branch's PR.
 
 ## Overview
 
-```
+```text
 Pre-flight (once)  →  Main Loop (repeat)  →  Final Validation  →  Exit Report
 ```
 
@@ -116,7 +116,7 @@ gh run view <run_id> --log-failed 2>/dev/null | tail -200
 
 **Delegate review handling to a subagent** using the Agent tool so the main context stays clean:
 
-```
+```text
 Agent(subagent_type="general-purpose", prompt="Run /pr-review $PR — fetch all review comments, prioritize human > Devin > CodeRabbit, address actionable feedback, and reply to addressed comments. For comments you disagree with, reply explaining why and sign it 'claude'. Return a summary of what was fixed, what was skipped, and what needs the user's decision.")
 ```
 

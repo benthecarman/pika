@@ -227,6 +227,14 @@ pub fn share_enqueue(
                     entry.relative_path
                 )));
             }
+            // Ensure batch files live under the media directory to prevent
+            // cleanup from deleting non-media queue files.
+            if !abs.starts_with(&layout.media_dir) {
+                return Err(ShareError::InvalidRequest(format!(
+                    "media batch file is not under media directory: {}",
+                    entry.relative_path
+                )));
+            }
         }
     }
 
@@ -695,7 +703,16 @@ fn normalize_request(request: ShareEnqueueRequest, now: u64) -> NormalizedReques
         media_relative_path,
         media_mime_type,
         media_filename,
-        media_batch: request.media_batch,
+        media_batch: request.media_batch.map(|batch| {
+            batch
+                .into_iter()
+                .map(|entry| ShareMediaBatchEntry {
+                    relative_path: entry.relative_path.trim().to_string(),
+                    mime_type: entry.mime_type.trim().to_string(),
+                    filename: entry.filename.trim().to_string(),
+                })
+                .collect()
+        }),
         client_request_id: request.client_request_id.trim().to_string(),
         created_at_ms: if request.created_at_ms == 0 {
             now
