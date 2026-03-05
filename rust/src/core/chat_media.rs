@@ -276,7 +276,11 @@ fn attachment_from_record(
 
     ChatMediaAttachment {
         original_hash_hex: record.original_hash_hex.clone(),
-        encrypted_hash_hex: Some(record.encrypted_hash_hex.clone()),
+        encrypted_hash_hex: if record.encrypted_hash_hex.is_empty() {
+            None
+        } else {
+            Some(record.encrypted_hash_hex.clone())
+        },
         url: record.url.clone(),
         mime_type: normalized_mime,
         filename: record.filename.clone(),
@@ -1664,6 +1668,7 @@ impl AppCore {
             let encrypted_hash_hex = self.chat_media_db.as_ref().and_then(|conn| {
                 chat_media_db::get_chat_media(conn, &account_pubkey, &chat_id, &target_hash)
                     .map(|r| r.encrypted_hash_hex)
+                    .filter(|h| !h.is_empty())
             });
 
             let request_id = uuid::Uuid::new_v4().to_string();
