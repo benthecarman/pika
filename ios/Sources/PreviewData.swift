@@ -305,7 +305,8 @@ enum PreviewAppState {
             toast: toast,
             developerMode: false,
             voiceRecording: nil,
-            mediaGallery: nil
+            mediaGallery: nil,
+            searchResults: nil
         )
     }
 
