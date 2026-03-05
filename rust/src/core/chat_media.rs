@@ -381,10 +381,14 @@ impl AppCore {
                         scheme_version: reference.scheme_version.clone(),
                         created_at,
                     };
-                    if let Err(e) = chat_media_db::upsert_chat_media(conn, &record) {
-                        tracing::warn!(%e, "failed to persist chat media metadata on receive");
+                    match chat_media_db::upsert_chat_media(conn, &record) {
+                        Ok(()) => {
+                            media_cache.insert(original_hash_hex.clone(), record);
+                        }
+                        Err(e) => {
+                            tracing::warn!(%e, "failed to persist chat media metadata on receive");
+                        }
                     }
-                    media_cache.insert(original_hash_hex.clone(), record);
                 }
             }
 
