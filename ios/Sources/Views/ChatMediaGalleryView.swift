@@ -81,19 +81,16 @@ private struct ThumbnailImage: View {
     @State private var image: UIImage?
 
     var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Rectangle()
-                    .fill(Color(.systemGray5))
+        Color(.systemGray5)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
             }
-        }
-        .frame(minWidth: 0, maxWidth: .infinity)
-        .aspectRatio(1, contentMode: .fit)
-        .clipped()
+            .clipped()
         .task(id: url) {
             if let cached = ImageCache.shared.image(for: url) {
                 self.image = cached
