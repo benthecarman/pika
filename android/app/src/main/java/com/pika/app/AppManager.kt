@@ -24,6 +24,7 @@ import com.pika.app.rust.ExternalSignerErrorKind
 import com.pika.app.rust.ExternalSignerHandshakeResult
 import com.pika.app.rust.ExternalSignerResult
 import com.pika.app.rust.FfiApp
+import com.pika.app.rust.MediaBatchItem
 import com.pika.app.rust.isValidPeerKey
 import com.pika.app.rust.MyProfileState
 import com.pika.app.rust.Screen
@@ -444,6 +445,22 @@ class AppManager private constructor(context: Context) : AppReconciler {
                         ),
                     )
                 }
+                is ShareDispatchKind.MediaBatch -> {
+                    val batchItems = kind.items.map { entry ->
+                        MediaBatchItem(
+                            dataBase64 = entry.dataBase64,
+                            mimeType = entry.mimeType,
+                            filename = entry.filename,
+                        )
+                    }
+                    rust.dispatch(
+                        AppAction.SendChatMediaBatch(
+                            chatId = job.chatId,
+                            items = batchItems,
+                            caption = kind.caption,
+                        ),
+                    )
+                }
             }
 
             runCatching {
@@ -859,6 +876,7 @@ internal sealed class PendingShareDraft {
                 mediaRelativePath = null,
                 mediaMimeType = null,
                 mediaFilename = null,
+                mediaBatch = null,
                 clientRequestId = clientRequestId,
                 createdAtMs = createdAtMs,
             )
@@ -885,6 +903,7 @@ internal sealed class PendingShareDraft {
                 mediaRelativePath = mediaRelativePath,
                 mediaMimeType = mediaMimeType,
                 mediaFilename = mediaFilename,
+                mediaBatch = null,
                 clientRequestId = clientRequestId,
                 createdAtMs = createdAtMs,
             )

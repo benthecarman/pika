@@ -42,6 +42,7 @@ enum TestIds {
     // Chat
     static let chatMessageInput = "chat_message_input"
     static let chatSend = "chat_send"
+    static let chatMediaGrid = "chat_media_grid"
     static let chatGroupInfo = "chat_group_info"
     static let chatReactionBar = "chat_reaction_bar"
     static let chatActionCard = "chat_action_card"

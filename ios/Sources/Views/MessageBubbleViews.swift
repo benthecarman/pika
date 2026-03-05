@@ -235,6 +235,7 @@ struct MediaAttachmentView: View {
     let isMine: Bool
     var maxMediaWidth: CGFloat = 240
     var maxMediaHeight: CGFloat = .infinity
+    var coverMode: Bool = false
     var onDownload: (() -> Void)? = nil
     var onTapImage: (() -> Void)? = nil
 
@@ -263,6 +264,9 @@ struct MediaAttachmentView: View {
     }
 
     private var imageSize: CGSize {
+        if coverMode {
+            return CGSize(width: maxMediaWidth, height: maxMediaHeight)
+        }
         let w = maxMediaWidth
         let h = w / aspectRatio
         if h > maxMediaHeight {
@@ -297,7 +301,7 @@ struct MediaAttachmentView: View {
                     .resizable()
                     .scaledToFill()
             } placeholder: {
-                imagePlaceholder
+                blurhashOrPlaceholder
             }
             .frame(width: imageSize.width, height: imageSize.height)
             .clipped()
@@ -312,7 +316,7 @@ struct MediaAttachmentView: View {
         } else if isAutoDownloadKind {
             // Auto-downloading: show placeholder with spinner
             ZStack {
-                imagePlaceholder
+                blurhashOrPlaceholder
                 ProgressView().tint(.white)
             }
             .frame(width: imageSize.width, height: imageSize.height)
@@ -368,6 +372,15 @@ struct MediaAttachmentView: View {
         }
         .buttonStyle(.plain)
         .frame(width: imageSize.width, height: imageSize.height)
+    }
+
+    @ViewBuilder
+    private var blurhashOrPlaceholder: some View {
+        if let hash = attachment.blurhash {
+            BlurhashView(hash: hash, size: imageSize)
+        } else {
+            imagePlaceholder
+        }
     }
 
     private var imagePlaceholder: some View {
@@ -522,31 +535,35 @@ private struct MessageBubble: View {
 
     @ViewBuilder
     private func mediaBubble(segments: [MessageSegment]) -> some View {
+        let visualMedia = message.media.filter { $0.kind == .image || $0.kind == .video }
+        let fileMedia = message.media.filter { $0.kind != .image && $0.kind != .video }
+
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(message.media, id: \.originalHashHex) { attachment in
-                let isVisualAttachment = attachment.kind == .image || attachment.kind == .video
+            // Visual media grid (images + videos)
+            if !visualMedia.isEmpty {
+                mediaGrid(attachments: visualMedia)
+                    .overlay(alignment: .bottomTrailing) {
+                        if !hasText, fileMedia.isEmpty {
+                            Text(timestampText)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.78))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.black.opacity(0.4), in: Capsule())
+                                .padding(6)
+                        }
+                    }
+            }
+
+            // File attachments (non-visual) in a vertical stack
+            ForEach(fileMedia, id: \.originalHashHex) { attachment in
                 MediaAttachmentView(
                     attachment: attachment,
                     isMine: message.isMine,
                     onDownload: {
                         onDownloadMedia?(message.id, attachment.originalHashHex)
-                    },
-                    onTapImage: {
-                        onTapImage?(attachment)
                     }
                 )
-                .overlay(alignment: .bottomTrailing) {
-                    // Floating timestamp only for images/videos without a text caption
-                    if !hasText, isVisualAttachment {
-                        Text(timestampText)
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.78))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.4), in: Capsule())
-                            .padding(6)
-                    }
-                }
             }
 
             // Inline timestamp for file attachments (non-image) without caption text
@@ -577,8 +594,106 @@ private struct MessageBubble: View {
                 .padding(.bottom, 6)
             }
         }
-        .background(hasText || hasFileAttachment ? (message.isMine ? Color.blue : Color.gray.opacity(0.2)) : Color.clear)
+        .background {
+            if hasText || hasFileAttachment {
+                message.isMine ? Color.blue : Color.gray.opacity(0.2)
+            } else {
+                Color.clear
+            }
+        }
         .clipShape(UnevenRoundedRectangleCompat(cornerRadii: bubbleRadii, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func mediaGrid(attachments: [ChatMediaAttachment]) -> some View {
+        let spacing: CGFloat = 2
+        let maxVisibleCount = 4
+        let cellHeight: CGFloat = 200
+
+        GeometryReader { geo in
+            let availableWidth = geo.size.width
+            let halfWidth = (availableWidth - spacing) / 2
+
+            switch attachments.count {
+            case 1:
+                mediaGridCell(attachment: attachments[0], maxWidth: availableWidth)
+
+            case 2:
+                HStack(spacing: spacing) {
+                    mediaGridCell(attachment: attachments[0], maxWidth: halfWidth)
+                    mediaGridCell(attachment: attachments[1], maxWidth: halfWidth)
+                }
+
+            case 3:
+                // 1 tall left + 2 stacked right (like iMessage)
+                HStack(spacing: spacing) {
+                    mediaGridCell(attachment: attachments[0], maxWidth: halfWidth, maxHeight: cellHeight * 2 + spacing)
+                    VStack(spacing: spacing) {
+                        mediaGridCell(attachment: attachments[1], maxWidth: halfWidth)
+                        mediaGridCell(attachment: attachments[2], maxWidth: halfWidth)
+                    }
+                }
+
+            default:
+                VStack(spacing: spacing) {
+                    HStack(spacing: spacing) {
+                        mediaGridCell(attachment: attachments[0], maxWidth: halfWidth)
+                        mediaGridCell(attachment: attachments[1], maxWidth: halfWidth)
+                    }
+                    HStack(spacing: spacing) {
+                        mediaGridCell(attachment: attachments[2], maxWidth: halfWidth)
+                        let remaining = attachments.count - maxVisibleCount
+                        if remaining > 0 {
+                            mediaGridCell(attachment: attachments[3], maxWidth: halfWidth)
+                                .overlay {
+                                    Color.black.opacity(0.5)
+                                        .allowsHitTesting(false)
+                                    Text("+\(remaining)")
+                                        .font(.title2.bold())
+                                        .foregroundStyle(.white)
+                                        .allowsHitTesting(false)
+                                }
+                        } else {
+                            mediaGridCell(attachment: attachments[3], maxWidth: halfWidth)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(height: mediaGridHeight(count: attachments.count, cellHeight: cellHeight, spacing: spacing))
+        .background(attachments.count > 1 ? Color(.systemGray5) : Color.clear)
+        .accessibilityIdentifier(TestIds.chatMediaGrid)
+    }
+
+    private func mediaGridHeight(count: Int, cellHeight: CGFloat, spacing: CGFloat) -> CGFloat {
+        switch count {
+        case 1:
+            return cellHeight
+        case 2:
+            return cellHeight
+        case 3:
+            return cellHeight * 2 + spacing
+        default:
+            return cellHeight * 2 + spacing
+        }
+    }
+
+    @ViewBuilder
+    private func mediaGridCell(attachment: ChatMediaAttachment, maxWidth: CGFloat, maxHeight: CGFloat = 200) -> some View {
+        MediaAttachmentView(
+            attachment: attachment,
+            isMine: message.isMine,
+            maxMediaWidth: maxWidth,
+            maxMediaHeight: maxHeight,
+            coverMode: true,
+            onDownload: {
+                onDownloadMedia?(message.id, attachment.originalHashHex)
+            },
+            onTapImage: {
+                onTapImage?(attachment)
+            }
+        )
+        .clipped()
     }
 
     private func markdownBubble(text: String) -> some View {

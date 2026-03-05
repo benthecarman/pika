@@ -21,11 +21,13 @@ struct ChatView: View {
     let onTypingStarted: (@MainActor () -> Void)?
     let onDownloadMedia: (@MainActor (String, String, String) -> Void)?
     let onSendMedia: (@MainActor (String, Data, String, String, String) -> Void)?
+    let onSendMediaBatch: (@MainActor (String, [StagedMediaItem], String) -> Void)?
     let onHypernoteAction: (@MainActor (String, String, String, [String: String]) -> Void)?
     let onSendPoll: (@MainActor (String, String, [String]) -> Void)?
     let onLoadOlderMessages: (@MainActor (String, String, UInt32) -> Void)?
-    var onRetryMessage: (@MainActor (String, String) -> Void)? = nil
-    @State private var selectedPhotoItem: PhotosPickerItem?
+    let onRetryMessage: (@MainActor (String, String) -> Void)?
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var stagedMedia: [StagedMediaItem] = []
     @State private var showFileImporter = false
     @State private var messageText = ""
     @State private var isAtBottom = true
@@ -65,6 +67,7 @@ struct ChatView: View {
         onTypingStarted: (@MainActor () -> Void)? = nil,
         onDownloadMedia: (@MainActor (String, String, String) -> Void)? = nil,
         onSendMedia: (@MainActor (String, Data, String, String, String) -> Void)? = nil,
+        onSendMediaBatch: (@MainActor (String, [StagedMediaItem], String) -> Void)? = nil,
         onHypernoteAction: (@MainActor (String, String, String, [String: String]) -> Void)? = nil,
         onSendPoll: (@MainActor (String, String, [String]) -> Void)? = nil,
         onLoadOlderMessages: (@MainActor (String, String, UInt32) -> Void)? = nil,
@@ -86,6 +89,7 @@ struct ChatView: View {
         self.onTypingStarted = onTypingStarted
         self.onDownloadMedia = onDownloadMedia
         self.onSendMedia = onSendMedia
+        self.onSendMediaBatch = onSendMediaBatch
         self.onHypernoteAction = onHypernoteAction
         self.onSendPoll = onSendPoll
         self.onLoadOlderMessages = onLoadOlderMessages
@@ -498,6 +502,23 @@ struct ChatView: View {
 
     private func sendMessage() {
         let trimmed = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // If we have staged media, send as batch (with caption).
+        if !stagedMedia.isEmpty {
+            let caption = trimmed
+            if stagedMedia.count == 1, let item = stagedMedia.first {
+                // Single item: use existing single-send path for backward compat.
+                onSendMedia?(chatId, item.data, item.mimeType, item.filename, caption)
+            } else {
+                onSendMediaBatch?(chatId, stagedMedia, caption)
+            }
+            stagedMedia = []
+            messageText = ""
+            insertedMentions = []
+            replyDraftMessage = nil
+            return
+        }
+
         guard !trimmed.isEmpty else { return }
         var wire = trimmed
         for mention in insertedMentions {
@@ -636,7 +657,8 @@ struct ChatView: View {
 
                 ChatInputBar(
                     messageText: $messageText,
-                    selectedPhotoItem: $selectedPhotoItem,
+                    selectedPhotoItems: $selectedPhotoItems,
+                    stagedMedia: $stagedMedia,
                     showFileImporter: $showFileImporter,
                     showPollComposer: $showPollComposer,
                     showAttachButton: onSendMedia != nil,
@@ -672,26 +694,37 @@ struct ChatView: View {
                         onTypingStarted?()
                     }
                 }
-                .onChangeCompat(of: selectedPhotoItem) { item in
-                    guard let item else { return }
+                .onChangeCompat(of: selectedPhotoItems) { items in
+                    guard !items.isEmpty else { return }
                     Task {
-                        defer { selectedPhotoItem = nil }
-                        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+                        defer { selectedPhotoItems = [] }
+                        for item in items {
+                            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+                            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "bin"
+                            let filename = "media.\(ext)"
+                            let mimeType = ""
 
-                        // Use UTType's preferred extension (covers all image + video types)
-                        let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "bin"
-                        let filename = "media.\(ext)"
+                            // Generate thumbnail for images
+                            let thumbnail: UIImage? = if ext == "bin" {
+                                nil
+                            } else {
+                                UIImage(data: data).flatMap { img in
+                                    let size = CGSize(width: 128, height: 128)
+                                    UIGraphicsBeginImageContextWithOptions(size, false, 0)
+                                    defer { UIGraphicsEndImageContext() }
+                                    img.draw(in: CGRect(origin: .zero, size: size))
+                                    return UIGraphicsGetImageFromCurrentImageContext()
+                                }
+                            }
 
-                        // MIME type left empty — Rust infers from filename extension
-                        let mimeType = ""
-
-                        // Use message text as caption if non-empty
-                        let caption = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !caption.isEmpty {
-                            messageText = ""
+                            stagedMedia.append(StagedMediaItem(
+                                id: UUID().uuidString,
+                                data: data,
+                                filename: filename,
+                                mimeType: mimeType,
+                                thumbnail: thumbnail
+                            ))
                         }
-
-                        onSendMedia?(chatId, data, mimeType, filename, caption)
                     }
                 }
                 .fileImporter(
