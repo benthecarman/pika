@@ -5117,20 +5117,19 @@ impl AppCore {
                     .pending_media_batch_sends
                     .iter()
                     .find(|(_, b)| b.chat_id == chat_id && b.temp_rumor_id == message_id)
-                    .map(|(k, b)| {
-                        // Find the first un-uploaded item.
+                    .and_then(|(k, b)| {
+                        // Find the first un-uploaded item; if all are done, skip this path.
                         let idx = b
                             .items
                             .iter()
-                            .position(|item| item.uploaded_url.is_none())
-                            .unwrap_or(0);
-                        (
+                            .position(|item| item.uploaded_url.is_none())?;
+                        Some((
                             k.clone(),
                             b.items[idx].request_id.clone(),
                             b.items[idx].encrypted_data.clone(),
                             b.items[idx].upload.mime_type.clone(),
                             hex::encode(b.items[idx].upload.encrypted_hash),
-                        )
+                        ))
                     })
                 {
                     if !self.network_enabled() {
@@ -5159,12 +5158,13 @@ impl AppCore {
                     }
                     // Update next_upload_index to restart from the first un-uploaded item.
                     if let Some(batch) = self.pending_media_batch_sends.get_mut(&batch_id) {
-                        let restart_idx = batch
+                        if let Some(restart_idx) = batch
                             .items
                             .iter()
                             .position(|item| item.uploaded_url.is_none())
-                            .unwrap_or(0);
-                        batch.next_upload_index = restart_idx + 1;
+                        {
+                            batch.next_upload_index = restart_idx + 1;
+                        }
                     }
                     let mid = message_id.clone();
                     if !self.mutate_current_chat_messages(&chat_id, |msgs| {
