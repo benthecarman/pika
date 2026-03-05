@@ -222,7 +222,11 @@ private func screenView(
             onWipeProfileCache: { manager.wipeProfileCacheForDeveloperTools() },
             onWipeMediaCache: { manager.dispatch(.wipeMediaCache) },
             onWipeLocalData: { manager.wipeLocalDataForDeveloperTools() },
-            nsecProvider: { manager.getNsec() }
+            nsecProvider: { manager.getNsec() },
+            onSearch: { query in
+                manager.dispatch(.searchMessages(query: query, chatId: nil))
+            },
+            onClearSearch: { manager.dispatch(.clearSearch) }
         )
     case .newChat:
         NewChatView(
@@ -422,7 +426,8 @@ private func chatListState(from state: AppState) -> ChatListViewState {
     ChatListViewState(
         chats: state.chatList,
         myNpub: myNpub(from: state),
-        myProfile: state.myProfile
+        myProfile: state.myProfile,
+        searchResults: state.searchResults
     )
 }
 

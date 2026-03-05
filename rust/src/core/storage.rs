@@ -831,6 +831,13 @@ impl AppCore {
             }
         };
 
+        tracing::info!(
+            query,
+            mdk_results = messages.len(),
+            groups_index_size = sess.groups_by_mls_id.len(),
+            "search_messages: MDK returned results"
+        );
+
         let my_pubkey_hex = sess.pubkey.to_hex();
 
         let results: Vec<crate::state::SearchResult> = messages
@@ -877,6 +884,11 @@ impl AppCore {
                 })
             })
             .collect();
+
+        tracing::info!(
+            final_results = results.len(),
+            "search_messages: filtered results"
+        );
 
         self.state.search_results = Some(results);
         self.emit_state();

@@ -17,58 +17,29 @@ struct ChatListView: View {
     let onWipeMediaCache: @MainActor () -> Void
     let onWipeLocalData: @MainActor () -> Void
     let nsecProvider: @MainActor () -> String?
+    let onSearch: @MainActor (String) -> Void
+    let onClearSearch: @MainActor () -> Void
     @State private var showMyNpub = false
+    @State private var searchText = ""
+
+    private var isSearching: Bool {
+        !searchText.isEmpty
+    }
 
     var body: some View {
-        List(state.chats, id: \.chatId) { chat in
-            let row = HStack(spacing: 12) {
-                if chat.isGroup {
-                    groupAvatar(chat)
-                } else {
-                    AvatarView(
-                        name: chat.members.first?.name,
-                        npub: chat.members.first?.npub ?? "",
-                        pictureUrl: chat.members.first?.pictureUrl
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(chat.displayName)
-                        .font(.headline)
-                        .lineLimit(1)
-                    if let subtitle = chat.subtitle {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                    Text(chat.lastMessagePreview)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
+        List {
+            if isSearching, let results = state.searchResults {
+                searchResultsList(results)
+            } else {
+                chatRows
             }
-            .contentShape(Rectangle())
-
-            Button {
-                onOpenChat(chat.chatId)
-            } label: {
-                if chat.unreadCount > 0 {
-                    row.badge(Int(chat.unreadCount))
-                } else {
-                    row
-                }
-            }
-            .tint(.primary)
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) {
-                    onArchiveChat(chat.chatId)
-                } label: {
-                    Label("Archive", systemImage: "archivebox")
-                }
-                .tint(.orange)
+        }
+        .searchable(text: $searchText, prompt: "Search messages")
+        .onChangeCompat(of: searchText) { query in
+            if query.isEmpty {
+                onClearSearch()
+            } else {
+                onSearch(query)
             }
         }
         .navigationTitle("Chats")
@@ -127,6 +98,123 @@ struct ChatListView: View {
     }
 
     @ViewBuilder
+    private var chatRows: some View {
+        ForEach(state.chats, id: \.chatId) { chat in
+            let row = HStack(spacing: 12) {
+                if chat.isGroup {
+                    groupAvatar(chat)
+                } else {
+                    AvatarView(
+                        name: chat.members.first?.name,
+                        npub: chat.members.first?.npub ?? "",
+                        pictureUrl: chat.members.first?.pictureUrl
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(chat.displayName)
+                        .font(.headline)
+                        .lineLimit(1)
+                    if let subtitle = chat.subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Text(chat.lastMessagePreview)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+
+            Button {
+                onOpenChat(chat.chatId)
+            } label: {
+                if chat.unreadCount > 0 {
+                    row.badge(Int(chat.unreadCount))
+                } else {
+                    row
+                }
+            }
+            .tint(.primary)
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) {
+                    onArchiveChat(chat.chatId)
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .tint(.orange)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func searchResultsList(_ results: [SearchResult]) -> some View {
+        if results.isEmpty {
+            Text("No results found")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
+                .listRowSeparator(.hidden)
+        } else {
+            ForEach(results, id: \.messageId) { result in
+                Button {
+                    onOpenChat(result.chatId)
+                } label: {
+                    HStack(spacing: 12) {
+                        if result.isGroup {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.blue.opacity(0.15))
+                                    .frame(width: 40, height: 40)
+                                Image(systemName: "person.3.fill")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(.blue)
+                            }
+                        } else {
+                            AvatarView(
+                                name: result.senderName,
+                                npub: result.senderPubkey,
+                                pictureUrl: nil,
+                                size: 40
+                            )
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(result.chatName)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Text(result.displayTimestamp)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if let sender = result.senderName {
+                                Text(sender)
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            Text(result.content)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .tint(.primary)
+            }
+        }
+    }
+
+    @ViewBuilder
     private func groupAvatar(_ chat: ChatSummary) -> some View {
         ZStack {
             Circle()
@@ -146,7 +234,8 @@ struct ChatListView: View {
             state: ChatListViewState(
                 chats: PreviewAppState.chatListEmpty.chatList,
                 myNpub: PreviewAppState.sampleNpub,
-                myProfile: PreviewAppState.chatListEmpty.myProfile
+                myProfile: PreviewAppState.chatListEmpty.myProfile,
+                searchResults: nil
             ),
             onLogout: {},
             onOpenChat: { _ in },
@@ -161,7 +250,9 @@ struct ChatListView: View {
             onWipeProfileCache: {},
             onWipeMediaCache: {},
             onWipeLocalData: {},
-            nsecProvider: { nil }
+            nsecProvider: { nil },
+            onSearch: { _ in },
+            onClearSearch: {}
         )
     }
 }
@@ -172,7 +263,8 @@ struct ChatListView: View {
             state: ChatListViewState(
                 chats: PreviewAppState.chatListPopulated.chatList,
                 myNpub: PreviewAppState.sampleNpub,
-                myProfile: PreviewAppState.chatListPopulated.myProfile
+                myProfile: PreviewAppState.chatListPopulated.myProfile,
+                searchResults: nil
             ),
             onLogout: {},
             onOpenChat: { _ in },
@@ -187,7 +279,9 @@ struct ChatListView: View {
             onWipeProfileCache: {},
             onWipeMediaCache: {},
             onWipeLocalData: {},
-            nsecProvider: { nil }
+            nsecProvider: { nil },
+            onSearch: { _ in },
+            onClearSearch: {}
         )
     }
 }
@@ -198,7 +292,8 @@ struct ChatListView: View {
             state: ChatListViewState(
                 chats: PreviewAppState.chatListLongNames.chatList,
                 myNpub: PreviewAppState.sampleNpub,
-                myProfile: PreviewAppState.chatListLongNames.myProfile
+                myProfile: PreviewAppState.chatListLongNames.myProfile,
+                searchResults: nil
             ),
             onLogout: {},
             onOpenChat: { _ in },
@@ -213,7 +308,9 @@ struct ChatListView: View {
             onWipeProfileCache: {},
             onWipeMediaCache: {},
             onWipeLocalData: {},
-            nsecProvider: { nil }
+            nsecProvider: { nil },
+            onSearch: { _ in },
+            onClearSearch: {}
         )
     }
 }

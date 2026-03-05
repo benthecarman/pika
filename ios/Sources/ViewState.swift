@@ -9,6 +9,7 @@ struct ChatListViewState: Equatable {
     let chats: [ChatSummary]
     let myNpub: String?
     let myProfile: MyProfileState
+    let searchResults: [SearchResult]?
 }
 
 struct NewChatViewState: Equatable {
