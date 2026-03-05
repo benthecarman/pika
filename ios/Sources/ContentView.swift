@@ -265,9 +265,6 @@ private func screenView(
             onGroupInfo: {
                 manager.dispatch(.pushScreen(screen: .groupInfo(chatId: chatId)))
             },
-            onOpenMediaGallery: {
-                manager.dispatch(.pushScreen(screen: .chatMedia(chatId: chatId)))
-            },
             onTapSender: { pubkey in
                 manager.dispatch(.openPeerProfile(pubkey: pubkey))
             },
@@ -344,6 +341,9 @@ private func screenView(
                     profile: profile,
                     onFollow: { manager.dispatch(.followUser(pubkey: profile.pubkey)) },
                     onUnfollow: { manager.dispatch(.unfollowUser(pubkey: profile.pubkey)) },
+                    onOpenMediaGallery: {
+                        manager.dispatch(.pushScreen(screen: .chatMedia(chatId: chatId)))
+                    },
                     onClose: { manager.dispatch(.closePeerProfile) }
                 )
             }
@@ -389,6 +389,7 @@ private func screenView(
                     profile: profile,
                     onFollow: { manager.dispatch(.followUser(pubkey: profile.pubkey)) },
                     onUnfollow: { manager.dispatch(.unfollowUser(pubkey: profile.pubkey)) },
+                    onOpenMediaGallery: nil,
                     onClose: { manager.dispatch(.closePeerProfile) }
                 )
             }
