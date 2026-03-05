@@ -235,6 +235,7 @@ struct MediaAttachmentView: View {
     let isMine: Bool
     var maxMediaWidth: CGFloat = 240
     var maxMediaHeight: CGFloat = .infinity
+    var coverMode: Bool = false
     var onDownload: (() -> Void)? = nil
     var onTapImage: (() -> Void)? = nil
 
@@ -263,6 +264,9 @@ struct MediaAttachmentView: View {
     }
 
     private var imageSize: CGSize {
+        if coverMode {
+            return CGSize(width: maxMediaWidth, height: maxMediaHeight)
+        }
         let w = maxMediaWidth
         let h = w / aspectRatio
         if h > maxMediaHeight {
@@ -591,9 +595,7 @@ private struct MessageBubble: View {
             }
         }
         .background {
-            let visualMedia = message.media.filter { $0.kind == .image || $0.kind == .video }
-            let needsBg = hasText || hasFileAttachment || visualMedia.count > 1
-            if needsBg {
+            if hasText || hasFileAttachment {
                 message.isMine ? Color.blue : Color.gray.opacity(0.2)
             } else {
                 Color.clear
@@ -659,6 +661,7 @@ private struct MessageBubble: View {
             }
         }
         .frame(height: mediaGridHeight(count: attachments.count, cellHeight: cellHeight, spacing: spacing))
+        .background(attachments.count > 1 ? Color(.systemGray5) : Color.clear)
         .accessibilityIdentifier(TestIds.chatMediaGrid)
     }
 
@@ -682,6 +685,7 @@ private struct MessageBubble: View {
             isMine: message.isMine,
             maxMediaWidth: maxWidth,
             maxMediaHeight: maxHeight,
+            coverMode: true,
             onDownload: {
                 onDownloadMedia?(message.id, attachment.originalHashHex)
             },
