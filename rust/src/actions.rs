@@ -190,6 +190,13 @@ pub enum AppAction {
     },
     ReloadConfig,
 
+    // Media gallery
+    LoadMediaGallery {
+        chat_id: String,
+    },
+    ClearMediaGallery,
+    WipeMediaCache,
+
     // Peer profile
     OpenPeerProfile {
         pubkey: String,
@@ -287,6 +294,11 @@ impl AppAction {
             AppAction::Foregrounded => "Foregrounded",
             AppAction::NostrConnectCallback { .. } => "NostrConnectCallback",
             AppAction::ReloadConfig => "ReloadConfig",
+
+            // Media gallery
+            AppAction::LoadMediaGallery { .. } => "LoadMediaGallery",
+            AppAction::ClearMediaGallery => "ClearMediaGallery",
+            AppAction::WipeMediaCache => "WipeMediaCache",
 
             // Peer profile
             AppAction::OpenPeerProfile { .. } => "OpenPeerProfile",

@@ -18,6 +18,21 @@ pub(super) struct ChatMediaRecord {
 
 const CHAT_MEDIA_DB_FILE: &str = "chat_media.sqlite3";
 
+fn record_from_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMediaRecord> {
+    Ok(ChatMediaRecord {
+        account_pubkey: row.get(0)?,
+        chat_id: row.get(1)?,
+        original_hash_hex: row.get(2)?,
+        encrypted_hash_hex: row.get(3)?,
+        url: row.get(4)?,
+        mime_type: row.get(5)?,
+        filename: row.get(6)?,
+        nonce_hex: row.get(7)?,
+        scheme_version: row.get(8)?,
+        created_at: row.get(9)?,
+    })
+}
+
 pub(super) fn open_chat_media_db(data_dir: &str) -> rusqlite::Result<Connection> {
     let path = Path::new(data_dir).join(CHAT_MEDIA_DB_FILE);
     let conn = Connection::open(path)?;
@@ -63,7 +78,7 @@ pub(super) fn upsert_chat_media(
             created_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT(account_pubkey, chat_id, original_hash_hex) DO UPDATE SET
-            encrypted_hash_hex = excluded.encrypted_hash_hex,
+            encrypted_hash_hex = CASE WHEN excluded.encrypted_hash_hex = '' THEN chat_media.encrypted_hash_hex ELSE excluded.encrypted_hash_hex END,
             url = excluded.url,
             mime_type = excluded.mime_type,
             filename = excluded.filename,
@@ -110,24 +125,110 @@ pub(super) fn get_chat_media(
         WHERE account_pubkey = ?1 AND chat_id = ?2 AND original_hash_hex = ?3
         "#,
         params![account_pubkey, chat_id, original_hash_hex],
-        |row| {
-            Ok(ChatMediaRecord {
-                account_pubkey: row.get(0)?,
-                chat_id: row.get(1)?,
-                original_hash_hex: row.get(2)?,
-                encrypted_hash_hex: row.get(3)?,
-                url: row.get(4)?,
-                mime_type: row.get(5)?,
-                filename: row.get(6)?,
-                nonce_hex: row.get(7)?,
-                scheme_version: row.get(8)?,
-                created_at: row.get(9)?,
-            })
-        },
+        record_from_row,
     )
     .optional()
     .ok()
     .flatten()
+}
+
+pub(super) fn get_all_chat_media_map(
+    conn: &Connection,
+    account_pubkey: &str,
+    chat_id: &str,
+) -> std::collections::HashMap<String, ChatMediaRecord> {
+    get_all_chat_media(conn, account_pubkey, chat_id)
+        .into_iter()
+        .map(|r| (r.original_hash_hex.clone(), r))
+        .collect()
+}
+
+pub(super) fn get_all_chat_media(
+    conn: &Connection,
+    account_pubkey: &str,
+    chat_id: &str,
+) -> Vec<ChatMediaRecord> {
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT
+            account_pubkey,
+            chat_id,
+            original_hash_hex,
+            encrypted_hash_hex,
+            url,
+            mime_type,
+            filename,
+            nonce_hex,
+            scheme_version,
+            created_at
+        FROM chat_media
+        WHERE account_pubkey = ?1 AND chat_id = ?2
+        ORDER BY created_at DESC
+        LIMIT 500
+        "#,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(%e, "failed to prepare get_all_chat_media query");
+            return vec![];
+        }
+    };
+
+    let rows = match stmt.query_map(params![account_pubkey, chat_id], record_from_row) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%e, "failed to query get_all_chat_media");
+            return vec![];
+        }
+    };
+
+    rows.filter_map(|r| r.ok()).collect()
+}
+
+/// Like `get_all_chat_media` but only returns image/* and video/* records.
+/// The LIMIT is applied *after* filtering so the gallery always gets up to 500
+/// actual gallery items.
+pub(super) fn get_gallery_media(
+    conn: &Connection,
+    account_pubkey: &str,
+    chat_id: &str,
+) -> Vec<ChatMediaRecord> {
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT
+            account_pubkey,
+            chat_id,
+            original_hash_hex,
+            encrypted_hash_hex,
+            url,
+            mime_type,
+            filename,
+            nonce_hex,
+            scheme_version,
+            created_at
+        FROM chat_media
+        WHERE account_pubkey = ?1 AND chat_id = ?2
+          AND (mime_type LIKE 'image/%' OR mime_type LIKE 'video/%')
+        ORDER BY created_at DESC
+        LIMIT 500
+        "#,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(%e, "failed to prepare get_gallery_media query");
+            return vec![];
+        }
+    };
+
+    let rows = match stmt.query_map(params![account_pubkey, chat_id], record_from_row) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%e, "failed to query get_gallery_media");
+            return vec![];
+        }
+    };
+
+    rows.filter_map(|r| r.ok()).collect()
 }
 
 #[cfg(test)]
@@ -250,5 +351,201 @@ mod tests {
         let got = get_chat_media(&reopened, "acc-a", "chat-a", "hash-a")
             .expect("expected record after reopening database");
         assert_eq!(got.created_at, 111);
+    }
+
+    #[test]
+    fn get_all_returns_records_sorted_by_created_at_desc() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let a = sample_record("acc-a", "chat-a", "hash-1", 100);
+        let b = sample_record("acc-a", "chat-a", "hash-2", 300);
+        let c = sample_record("acc-a", "chat-a", "hash-3", 200);
+        upsert_chat_media(&conn, &a).expect("upsert a");
+        upsert_chat_media(&conn, &b).expect("upsert b");
+        upsert_chat_media(&conn, &c).expect("upsert c");
+
+        let results = get_all_chat_media(&conn, "acc-a", "chat-a");
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].created_at, 300);
+        assert_eq!(results[1].created_at, 200);
+        assert_eq!(results[2].created_at, 100);
+    }
+
+    #[test]
+    fn get_all_empty_when_no_media() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let results = get_all_chat_media(&conn, "acc-a", "chat-a");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn get_all_isolated_by_account_and_chat() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        upsert_chat_media(&conn, &sample_record("acc-a", "chat-a", "hash-1", 1)).expect("upsert");
+        upsert_chat_media(&conn, &sample_record("acc-a", "chat-b", "hash-2", 2)).expect("upsert");
+        upsert_chat_media(&conn, &sample_record("acc-b", "chat-a", "hash-3", 3)).expect("upsert");
+
+        let results = get_all_chat_media(&conn, "acc-a", "chat-a");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original_hash_hex, "hash-1");
+    }
+
+    // --- encrypted_hash_hex preservation tests ---
+
+    #[test]
+    fn upsert_with_empty_encrypted_hash_does_not_overwrite_existing() {
+        // Simulates: upload sets real hash, then receive-time upsert writes "".
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut uploaded = sample_record("acc-a", "chat-a", "hash-a", 100);
+        uploaded.encrypted_hash_hex = "real-encrypted-hash".to_string();
+        upsert_chat_media(&conn, &uploaded).expect("upsert uploaded");
+
+        let mut received = sample_record("acc-a", "chat-a", "hash-a", 100);
+        received.encrypted_hash_hex = String::new();
+        upsert_chat_media(&conn, &received).expect("upsert received");
+
+        let got = get_chat_media(&conn, "acc-a", "chat-a", "hash-a").expect("record");
+        assert_eq!(
+            got.encrypted_hash_hex, "real-encrypted-hash",
+            "empty upsert must not overwrite existing encrypted hash"
+        );
+    }
+
+    #[test]
+    fn upsert_with_real_encrypted_hash_overwrites_empty() {
+        // Simulates: receive-time upsert writes "" first, then upload sets real hash.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut received = sample_record("acc-a", "chat-a", "hash-a", 100);
+        received.encrypted_hash_hex = String::new();
+        upsert_chat_media(&conn, &received).expect("upsert received");
+
+        let mut uploaded = sample_record("acc-a", "chat-a", "hash-a", 100);
+        uploaded.encrypted_hash_hex = "real-encrypted-hash".to_string();
+        upsert_chat_media(&conn, &uploaded).expect("upsert uploaded");
+
+        let got = get_chat_media(&conn, "acc-a", "chat-a", "hash-a").expect("record");
+        assert_eq!(
+            got.encrypted_hash_hex, "real-encrypted-hash",
+            "real hash must overwrite empty"
+        );
+    }
+
+    #[test]
+    fn upsert_with_real_encrypted_hash_overwrites_different_real_hash() {
+        // Simulates: re-upload or corrected hash replaces old one.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut first = sample_record("acc-a", "chat-a", "hash-a", 100);
+        first.encrypted_hash_hex = "old-hash".to_string();
+        upsert_chat_media(&conn, &first).expect("upsert first");
+
+        let mut second = sample_record("acc-a", "chat-a", "hash-a", 100);
+        second.encrypted_hash_hex = "new-hash".to_string();
+        upsert_chat_media(&conn, &second).expect("upsert second");
+
+        let got = get_chat_media(&conn, "acc-a", "chat-a", "hash-a").expect("record");
+        assert_eq!(
+            got.encrypted_hash_hex, "new-hash",
+            "non-empty hash must overwrite previous"
+        );
+    }
+
+    #[test]
+    fn fresh_insert_with_empty_encrypted_hash_stores_empty() {
+        // First insert has no encrypted hash (receive before upload).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut record = sample_record("acc-a", "chat-a", "hash-a", 100);
+        record.encrypted_hash_hex = String::new();
+        upsert_chat_media(&conn, &record).expect("upsert");
+
+        let got = get_chat_media(&conn, "acc-a", "chat-a", "hash-a").expect("record");
+        assert_eq!(
+            got.encrypted_hash_hex, "",
+            "initial empty hash stored as-is"
+        );
+    }
+
+    // --- get_gallery_media MIME filtering tests ---
+
+    #[test]
+    fn gallery_includes_image_and_video_excludes_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut img = sample_record("acc-a", "chat-a", "hash-1", 100);
+        img.mime_type = "image/jpeg".to_string();
+
+        let mut vid = sample_record("acc-a", "chat-a", "hash-2", 200);
+        vid.mime_type = "video/mp4".to_string();
+
+        let mut audio = sample_record("acc-a", "chat-a", "hash-3", 300);
+        audio.mime_type = "audio/mp4".to_string();
+        audio.filename = "voice_123.m4a".to_string();
+
+        let mut file = sample_record("acc-a", "chat-a", "hash-4", 400);
+        file.mime_type = "application/pdf".to_string();
+        file.filename = "doc.pdf".to_string();
+
+        upsert_chat_media(&conn, &img).expect("upsert img");
+        upsert_chat_media(&conn, &vid).expect("upsert vid");
+        upsert_chat_media(&conn, &audio).expect("upsert audio");
+        upsert_chat_media(&conn, &file).expect("upsert file");
+
+        let results = get_gallery_media(&conn, "acc-a", "chat-a");
+        assert_eq!(results.len(), 2);
+        // Newest first
+        assert_eq!(results[0].original_hash_hex, "hash-2"); // video
+        assert_eq!(results[1].original_hash_hex, "hash-1"); // image
+    }
+
+    #[test]
+    fn gallery_matches_normalized_mime_types() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut upper = sample_record("acc-a", "chat-a", "hash-1", 100);
+        upper.mime_type = "Image/PNG".to_string();
+
+        let mut video_upper = sample_record("acc-a", "chat-a", "hash-2", 200);
+        video_upper.mime_type = "Video/QuickTime".to_string();
+
+        upsert_chat_media(&conn, &upper).expect("upsert");
+        upsert_chat_media(&conn, &video_upper).expect("upsert");
+
+        // SQLite LIKE is case-insensitive for ASCII, so these should match
+        let results = get_gallery_media(&conn, "acc-a", "chat-a");
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn gallery_excludes_whitespace_padded_mime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_chat_media_db(&dir.path().to_string_lossy()).expect("open db");
+
+        let mut padded = sample_record("acc-a", "chat-a", "hash-1", 100);
+        padded.mime_type = " image/jpeg ".to_string();
+
+        upsert_chat_media(&conn, &padded).expect("upsert");
+
+        // Whitespace-padded mime won't match LIKE 'image/%', demonstrating
+        // why callers must normalize before upserting.
+        let results = get_gallery_media(&conn, "acc-a", "chat-a");
+        assert_eq!(
+            results.len(),
+            0,
+            "whitespace-padded mime must not match gallery filter"
+        );
     }
 }

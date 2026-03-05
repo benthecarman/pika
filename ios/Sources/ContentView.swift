@@ -220,6 +220,7 @@ private func screenView(
             isDeveloperModeEnabledProvider: { manager.isDeveloperModeEnabled },
             onEnableDeveloperMode: { manager.enableDeveloperMode() },
             onWipeProfileCache: { manager.wipeProfileCacheForDeveloperTools() },
+            onWipeMediaCache: { manager.dispatch(.wipeMediaCache) },
             onWipeLocalData: { manager.wipeLocalDataForDeveloperTools() },
             nsecProvider: { manager.getNsec() }
         )
@@ -341,6 +342,9 @@ private func screenView(
                     profile: profile,
                     onFollow: { manager.dispatch(.followUser(pubkey: profile.pubkey)) },
                     onUnfollow: { manager.dispatch(.unfollowUser(pubkey: profile.pubkey)) },
+                    onOpenMediaGallery: {
+                        manager.dispatch(.pushScreen(screen: .chatMedia(chatId: chatId)))
+                    },
                     onClose: { manager.dispatch(.closePeerProfile) }
                 )
             }
@@ -372,6 +376,9 @@ private func screenView(
                     imageBase64: data.base64EncodedString(),
                     mimeType: mimeType
                 ))
+            },
+            onOpenMediaGallery: {
+                manager.dispatch(.pushScreen(screen: .chatMedia(chatId: chatId)))
             }
         )
         .sheet(isPresented: Binding(
@@ -383,9 +390,21 @@ private func screenView(
                     profile: profile,
                     onFollow: { manager.dispatch(.followUser(pubkey: profile.pubkey)) },
                     onUnfollow: { manager.dispatch(.unfollowUser(pubkey: profile.pubkey)) },
+                    onOpenMediaGallery: nil,
                     onClose: { manager.dispatch(.closePeerProfile) }
                 )
             }
+        }
+    case .chatMedia(let chatId):
+        ChatMediaGalleryView(
+            chatId: chatId,
+            items: state.mediaGallery?.items ?? []
+        )
+        .onAppear {
+            manager.dispatch(.loadMediaGallery(chatId: chatId))
+        }
+        .onDisappear {
+            manager.dispatch(.clearMediaGallery)
         }
     }
 }

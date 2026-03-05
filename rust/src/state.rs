@@ -22,6 +22,7 @@ pub struct AppState {
     pub toast: Option<String>,
     pub developer_mode: bool,
     pub voice_recording: Option<VoiceRecordingState>,
+    pub media_gallery: Option<MediaGalleryState>,
 }
 
 impl AppState {
@@ -44,6 +45,7 @@ impl AppState {
             toast: None,
             developer_mode: false,
             voice_recording: None,
+            media_gallery: None,
         }
     }
 }
@@ -210,6 +212,7 @@ pub enum Screen {
     NewChat,
     NewGroupChat,
     GroupInfo { chat_id: String },
+    ChatMedia { chat_id: String },
 }
 
 #[derive(uniffi::Enum, Clone, Debug, PartialEq)]
@@ -403,6 +406,18 @@ pub enum ChatMediaKind {
     VoiceNote,
     Video,
     File,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct MediaGalleryState {
+    pub chat_id: String,
+    pub items: Vec<MediaGalleryItem>,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct MediaGalleryItem {
+    pub attachment: ChatMediaAttachment,
+    pub timestamp: i64,
 }
 
 #[derive(uniffi::Record, Clone, Debug)]

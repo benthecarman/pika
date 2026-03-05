@@ -2787,10 +2787,12 @@ impl AppCore {
         }
 
         // Prevent stacking multiple chat screens (and their child GroupInfo screens).
-        self.state
-            .router
-            .screen_stack
-            .retain(|s| !matches!(s, Screen::Chat { .. } | Screen::GroupInfo { .. }));
+        self.state.router.screen_stack.retain(|s| {
+            !matches!(
+                s,
+                Screen::Chat { .. } | Screen::GroupInfo { .. } | Screen::ChatMedia { .. }
+            )
+        });
 
         let screen = Screen::Chat {
             chat_id: chat_id.to_string(),
@@ -2818,6 +2820,7 @@ impl AppCore {
             self.state.current_chat = None;
             self.state.active_call = None;
             self.state.voice_recording = None;
+            self.state.media_gallery = None;
             self.state.call_timeline = vec![];
             self.state.chat_list = vec![];
             self.state.busy = BusyState::idle();
@@ -4647,6 +4650,25 @@ impl AppCore {
 
                 self.toast("Relay config reloaded");
             }
+            AppAction::LoadMediaGallery { chat_id } => {
+                if !self.is_logged_in() {
+                    return;
+                }
+                self.load_media_gallery(&chat_id);
+            }
+            AppAction::ClearMediaGallery => {
+                self.state.media_gallery = None;
+                self.emit_state();
+            }
+            AppAction::WipeMediaCache => {
+                if let Some(conn) = self.chat_media_db.as_ref() {
+                    let _ = conn.execute("DELETE FROM chat_media", []);
+                }
+                let _ = std::fs::remove_dir_all(chat_media::media_root(&self.data_dir));
+                self.state.media_gallery = None;
+                self.emit_state();
+                self.toast("Media cache wiped");
+            }
             AppAction::OpenPeerProfile { pubkey } => {
                 if !self.is_logged_in() {
                     return;
@@ -5664,7 +5686,7 @@ fn prune_chat_routes(stack: &mut Vec<Screen>, chat_id: &str) {
     stack.retain(|screen| {
         !matches!(
             screen,
-            Screen::Chat { chat_id: id } | Screen::GroupInfo { chat_id: id } if id == chat_id
+            Screen::Chat { chat_id: id } | Screen::GroupInfo { chat_id: id } | Screen::ChatMedia { chat_id: id } if id == chat_id
         )
     });
 }

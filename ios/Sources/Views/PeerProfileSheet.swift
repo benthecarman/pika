@@ -7,6 +7,7 @@ struct PeerProfileSheet: View {
     let profile: PeerProfileState
     let onFollow: @MainActor () -> Void
     let onUnfollow: @MainActor () -> Void
+    let onOpenMediaGallery: (@MainActor () -> Void)?
     let onClose: @MainActor () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +20,7 @@ struct PeerProfileSheet: View {
                 avatarSection
                 nameSection
                 npubSection
+                mediaSection
                 qrSection
                 followSection
             }
@@ -111,6 +113,27 @@ struct PeerProfileSheet: View {
             }
         } header: {
             Text("Public Key")
+        }
+    }
+
+    @ViewBuilder
+    private var mediaSection: some View {
+        if let onOpenMediaGallery {
+            Section {
+                Button {
+                    dismiss()
+                    onOpenMediaGallery()
+                } label: {
+                    HStack {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .foregroundStyle(.blue)
+                        Text("Photos & Videos")
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 

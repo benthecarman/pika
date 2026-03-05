@@ -7,7 +7,7 @@ use mdk_core::encrypted_media::types::{MediaProcessingOptions, MediaReference};
 use nostr_blossom::client::BlossomClient;
 use sha2::{Digest, Sha256};
 
-use crate::state::{ChatMediaAttachment, ChatMediaKind};
+use crate::state::{ChatMediaAttachment, ChatMediaKind, MediaGalleryItem, MediaGalleryState};
 
 use super::chat_media_db::{self, ChatMediaRecord};
 use super::*;
@@ -211,7 +211,7 @@ fn sanitize_filename(filename: &str) -> String {
     }
 }
 
-fn media_root(data_dir: &str) -> PathBuf {
+pub(super) fn media_root(data_dir: &str) -> PathBuf {
     Path::new(data_dir).join("chat_media")
 }
 
@@ -250,6 +250,51 @@ pub(super) fn is_imeta_tag(tag: &Tag) -> bool {
     matches!(tag.kind(), TagKind::Custom(kind) if kind.as_ref() == "imeta")
 }
 
+fn resolve_mime_type(mime_type: &str, filename: &str) -> String {
+    if mime_type.trim().is_empty() {
+        mime_type_for_filename(filename)
+    } else {
+        normalized_mime_type(mime_type)
+    }
+}
+
+fn attachment_from_record(
+    data_dir: &str,
+    chat_id: &str,
+    account_pubkey: &str,
+    record: &super::chat_media_db::ChatMediaRecord,
+) -> ChatMediaAttachment {
+    let normalized_mime = resolve_mime_type(&record.mime_type, &record.filename);
+    let kind = infer_media_kind(&normalized_mime, &record.filename);
+    let local_path = path_if_exists(&media_file_path(
+        data_dir,
+        account_pubkey,
+        chat_id,
+        &record.original_hash_hex,
+        &record.filename,
+    ));
+
+    ChatMediaAttachment {
+        original_hash_hex: record.original_hash_hex.clone(),
+        encrypted_hash_hex: if record.encrypted_hash_hex.is_empty() {
+            None
+        } else {
+            Some(record.encrypted_hash_hex.clone())
+        },
+        url: record.url.clone(),
+        mime_type: normalized_mime,
+        filename: record.filename.clone(),
+        kind,
+        width: None,
+        height: None,
+        nonce_hex: record.nonce_hex.clone(),
+        scheme_version: record.scheme_version.clone(),
+        local_path,
+        upload_progress: None,
+        blurhash: None,
+    }
+}
+
 impl AppCore {
     fn attachment_from_reference(
         &self,
@@ -270,11 +315,7 @@ impl AppCore {
             .dimensions
             .map(|(w, h)| (Some(w), Some(h)))
             .unwrap_or((None, None));
-        let normalized_mime = if reference.mime_type.trim().is_empty() {
-            mime_type_for_filename(&reference.filename)
-        } else {
-            normalized_mime_type(&reference.mime_type)
-        };
+        let normalized_mime = resolve_mime_type(&reference.mime_type, &reference.filename);
         let kind = infer_media_kind(&normalized_mime, &reference.filename);
 
         ChatMediaAttachment {
@@ -294,6 +335,7 @@ impl AppCore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn chat_media_attachments_for_tags(
         &self,
         mdk: &PikaMdk,
@@ -301,6 +343,8 @@ impl AppCore {
         chat_id: &str,
         account_pubkey: &str,
         tags: &Tags,
+        created_at: i64,
+        media_cache: &mut HashMap<String, ChatMediaRecord>,
     ) -> Vec<ChatMediaAttachment> {
         let manager = mdk.media_manager(group_id.clone());
         let mut out = Vec::new();
@@ -319,10 +363,39 @@ impl AppCore {
             };
 
             let original_hash_hex = hex::encode(reference.original_hash);
-            let encrypted_hash_hex = self.chat_media_db.as_ref().and_then(|conn| {
-                chat_media_db::get_chat_media(conn, account_pubkey, chat_id, &original_hash_hex)
-                    .map(|r| r.encrypted_hash_hex)
-            });
+
+            // Persist media metadata so the gallery can list all media without
+            // scanning the full message store.  Skip the write if we already
+            // have this hash in the pre-loaded cache.
+            if !media_cache.contains_key(&original_hash_hex) {
+                if let Some(conn) = self.chat_media_db.as_ref() {
+                    let record = ChatMediaRecord {
+                        account_pubkey: account_pubkey.to_string(),
+                        chat_id: chat_id.to_string(),
+                        original_hash_hex: original_hash_hex.clone(),
+                        encrypted_hash_hex: String::new(),
+                        url: reference.url.clone(),
+                        mime_type: resolve_mime_type(&reference.mime_type, &reference.filename),
+                        filename: reference.filename.clone(),
+                        nonce_hex: hex::encode(reference.nonce),
+                        scheme_version: reference.scheme_version.clone(),
+                        created_at,
+                    };
+                    match chat_media_db::upsert_chat_media(conn, &record) {
+                        Ok(()) => {
+                            media_cache.insert(original_hash_hex.clone(), record);
+                        }
+                        Err(e) => {
+                            tracing::warn!(%e, "failed to persist chat media metadata on receive");
+                        }
+                    }
+                }
+            }
+
+            let encrypted_hash_hex = media_cache
+                .get(&original_hash_hex)
+                .map(|r| r.encrypted_hash_hex.clone())
+                .filter(|h| !h.is_empty());
 
             out.push(self.attachment_from_reference(
                 chat_id,
@@ -374,11 +447,7 @@ impl AppCore {
             return;
         }
 
-        let mime_type = if mime_type.trim().is_empty() {
-            mime_type_for_filename(&filename)
-        } else {
-            normalized_mime_type(&mime_type)
-        };
+        let mime_type = resolve_mime_type(&mime_type, &filename);
 
         let caption = caption.trim().to_string();
 
@@ -1604,6 +1673,7 @@ impl AppCore {
             let encrypted_hash_hex = self.chat_media_db.as_ref().and_then(|conn| {
                 chat_media_db::get_chat_media(conn, &account_pubkey, &chat_id, &target_hash)
                     .map(|r| r.encrypted_hash_hex)
+                    .filter(|h| !h.is_empty())
             });
 
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -1727,6 +1797,38 @@ impl AppCore {
         }
 
         self.refresh_current_chat_if_open(&pending.chat_id);
+    }
+
+    pub(super) fn load_media_gallery(&mut self, chat_id: &str) {
+        let Some(sess) = self.session.as_ref() else {
+            return;
+        };
+        let account_pubkey = sess.pubkey.to_hex();
+
+        let Some(conn) = self.chat_media_db.as_ref() else {
+            return;
+        };
+
+        let records = chat_media_db::get_gallery_media(conn, &account_pubkey, chat_id);
+
+        let items: Vec<MediaGalleryItem> = records
+            .iter()
+            .map(|record| MediaGalleryItem {
+                attachment: attachment_from_record(
+                    &self.data_dir,
+                    chat_id,
+                    &account_pubkey,
+                    record,
+                ),
+                timestamp: record.created_at,
+            })
+            .collect();
+
+        self.state.media_gallery = Some(MediaGalleryState {
+            chat_id: chat_id.to_string(),
+            items,
+        });
+        self.emit_state();
     }
 }
 
