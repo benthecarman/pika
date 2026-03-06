@@ -42,6 +42,7 @@ struct ChatView: View {
     @State private var insertedMentions: [(display: String, npub: String)] = []
     @State private var replyDraftMessage: ChatMessage?
     @State private var fullscreenImageAttachment: ChatMediaAttachment?
+    @State private var fullscreenImageAttachments: [ChatMediaAttachment] = []
     @State private var showPollComposer = false
     @State private var scrollToBottomTrigger = 0
     @State private var voiceRecorder: VoiceRecorder
@@ -283,9 +284,13 @@ struct ChatView: View {
         }
         .overFullScreenCover(item: $fullscreenImageAttachment) { attachment in
             FullscreenImageViewer(
-                attachment: attachment,
+                attachments: fullscreenImageAttachments.isEmpty ? [attachment] : fullscreenImageAttachments,
+                selected: attachment,
                 sourceFrame: ImageViewerTransition.sourceFrame,
-                onDismiss: { fullscreenImageAttachment = nil }
+                onDismiss: {
+                    fullscreenImageAttachment = nil
+                    fullscreenImageAttachments = []
+                }
             )
         }
         .sheet(isPresented: $showPollComposer) {
@@ -310,8 +315,9 @@ struct ChatView: View {
             onDownloadMedia: onDownloadMedia.map { callback in
                 { messageId, hash in callback(chatId, messageId, hash) }
             },
-            onTapImage: { attachment in
-                fullscreenImageAttachment = attachment
+            onTapImage: { attachments, selected in
+                fullscreenImageAttachments = attachments
+                fullscreenImageAttachment = selected
             },
             onHypernoteAction: onHypernoteAction.map { callback in
                 { actionName, messageId, form in

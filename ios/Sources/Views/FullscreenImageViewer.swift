@@ -67,7 +67,7 @@ struct FullscreenImageViewer: View {
                 .mask(dismissClipMask(geo: geo))
                 .scaleEffect(dismissScale)
                 .offset(x: dragOffset.width, y: dragOffset.height)
-                .gesture(makeDismissGesture(geo: geo))
+                .simultaneousGesture(makeDismissGesture(geo: geo))
             }
             .overlay(alignment: .top) {
                 controlsBar(topInset: geo.safeAreaInsets.top, geo: geo)
