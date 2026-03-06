@@ -461,7 +461,7 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
     private var isJumpButtonVisible = false
 
     var bottomViewportInset: CGFloat {
-        max(accessoryContainerView.currentHeight, keyboardOverlapHeight)
+        max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
     }
     init(layout: UICollectionViewLayout, accessoryContent: AccessoryContent) {
         self.collectionView = BoundsAwareCollectionView(frame: .zero, collectionViewLayout: layout)
@@ -567,11 +567,6 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
             updates()
             jumpButtonChromeView.isHidden = !visible
         }
-    }
-
-    private var keyboardOverlapHeight: CGFloat {
-        let overlap = view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY - view.safeAreaInsets.bottom
-        return max(0, overlap)
     }
 
     private func configureJumpButton() {
