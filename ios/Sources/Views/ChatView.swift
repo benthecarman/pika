@@ -322,7 +322,7 @@ struct ChatView: View {
         visualBottomInset: CGFloat
     ) -> some View {
         let messagesById = Dictionary(uniqueKeysWithValues: chat.messages.map { ($0.id, $0) })
-        InvertedMessageList(
+        MessageCollectionList(
             rows: timelineRows(chat),
             chat: chat,
             messagesById: messagesById,

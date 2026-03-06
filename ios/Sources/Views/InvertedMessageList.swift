@@ -1,21 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// A UITableView-based inverted message list for chat.
+/// A UICollectionView-based message transcript for chat.
 ///
-/// The table is flipped via scaleY:-1 so the "bottom" (newest messages) is at the
-/// natural scroll origin. Each cell's content is flipped back. This means older
-/// messages are *appended* (not prepended) to the data source, so loading history
-/// never causes scroll jumps.
-///
-/// Uses `UITableViewDiffableDataSource` for correct, animation-free diff updates.
-struct InvertedMessageList: UIViewRepresentable {
+/// The collection view uses a normal top-to-bottom layout so scroll math,
+/// sticky-bottom detection, and chrome reserves stay aligned with UIKit.
+struct MessageCollectionList: UIViewRepresentable {
     let rows: [ChatView.ChatTimelineRow]
     let chat: ChatViewState
     let messagesById: [String: ChatMessage]
     let isGroup: Bool
 
-    // Callbacks
     let onSendMessage: @MainActor (String, String?) -> Void
     var onTapSender: (@MainActor (String) -> Void)?
     var onReact: (@MainActor (String, String) -> Void)?
@@ -26,7 +21,6 @@ struct InvertedMessageList: UIViewRepresentable {
     var onRetryMessage: ((String) -> Void)?
     var onLoadOlderMessages: (() -> Void)?
 
-    // Scroll state
     var visualTopInset: CGFloat
     var visualBottomInset: CGFloat
     @Binding var isAtBottom: Bool
@@ -38,86 +32,88 @@ struct InvertedMessageList: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeUIView(context: Context) -> UITableView {
-        let tableView = InsetAwareTableView(frame: .zero, style: .plain)
-        tableView.transform = CGAffineTransform(scaleX: 1, y: -1)
-        tableView.separatorStyle = .none
-        tableView.backgroundColor = .clear
-        tableView.contentInsetAdjustmentBehavior = .never
-        tableView.showsVerticalScrollIndicator = true
-        tableView.alwaysBounceVertical = false
-        tableView.keyboardDismissMode = .interactive
-        tableView.rowHeight = UITableView.automaticDimension
-        tableView.estimatedRowHeight = 80
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        tableView.delegate = context.coordinator
-        tableView.onLayoutChange = { [weak coordinator = context.coordinator] in
+    func makeUIView(context: Context) -> UICollectionView {
+        let layout = MessageCollectionList.makeLayout()
+        let collectionView = InsetAwareCollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.backgroundColor = .clear
+        collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.alwaysBounceVertical = false
+        collectionView.keyboardDismissMode = .interactive
+        collectionView.delegate = context.coordinator
+        collectionView.showsVerticalScrollIndicator = true
+        collectionView.alwaysBounceHorizontal = false
+        collectionView.onLayoutChange = { [weak coordinator = context.coordinator] in
             _ = coordinator?.applyLayoutMetricsIfNeeded()
         }
-        context.coordinator.tableView = tableView
+        context.coordinator.collectionView = collectionView
 
-        // Set up diffable data source.
-        let dataSource = UITableViewDiffableDataSource<Int, String>(tableView: tableView) {
-            [weak coordinator = context.coordinator] tableView, indexPath, itemId in
-            let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
-            guard let coordinator else { return cell }
-            cell.selectionStyle = .none
-            cell.backgroundColor = .clear
-
-            if let row = coordinator.rowsByID[itemId] {
-                cell.contentConfiguration = UIHostingConfiguration {
-                    coordinator.rowContent(for: row, parent: coordinator.parent)
-                        .scaleEffect(x: 1, y: -1, anchor: .center)
-                }
-                .minSize(width: 0, height: 0)
-                .margins(.all, 0)
+        let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> {
+            [weak coordinator = context.coordinator] cell, _, itemID in
+            guard let coordinator, let row = coordinator.rowsByID[itemID] else { return }
+            var background = UIBackgroundConfiguration.clear()
+            background.backgroundColor = .clear
+            cell.backgroundConfiguration = background
+            cell.contentConfiguration = UIHostingConfiguration {
+                coordinator.rowContent(for: row, parent: coordinator.parent)
             }
-            return cell
+            .minSize(width: 0, height: 0)
+            .margins(.all, 0)
         }
-        dataSource.defaultRowAnimation = .none
+        context.coordinator.cellRegistration = registration
+
+        let dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) {
+            collectionView, indexPath, itemID in
+            collectionView.dequeueConfiguredReusableCell(
+                using: registration,
+                for: indexPath,
+                item: itemID
+            )
+        }
         context.coordinator.dataSource = dataSource
 
-        // Apply initial snapshot.
-        let invertedRows = buildInvertedRows()
-        context.coordinator.applyRows(invertedRows, animated: false)
+        let renderedRows = buildRenderedRows()
+        context.coordinator.applyRows(renderedRows, animated: false)
         context.coordinator.applyLayoutMetricsIfNeeded()
+        context.coordinator.scrollToBottom(animated: false)
 
-        return tableView
+        return collectionView
     }
 
-    func updateUIView(_ tableView: UITableView, context: Context) {
+    func updateUIView(_ collectionView: UICollectionView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
         let layoutMetricsChanged = coordinator.applyLayoutMetricsIfNeeded()
 
-        let newInverted = buildInvertedRows()
-        let newIDs = newInverted.map(\.id)
+        let newRows = buildRenderedRows()
+        let newIDs = newRows.map(\.id)
 
         if newIDs != coordinator.currentIDs {
-            // Structural change — apply new snapshot.
             let stickyBottom = shouldStickToBottom
-            coordinator.applyRows(newInverted, animated: false) {
+            let anchor = stickyBottom ? nil : coordinator.captureTopAnchor()
+            coordinator.applyRows(newRows, animated: false) {
                 if stickyBottom {
                     coordinator.scrollToBottom(animated: false)
+                } else if let anchor {
+                    coordinator.restore(anchor: anchor)
                 }
             }
         } else if let dataSource = coordinator.dataSource {
-            // Same structure — reconfigure visible cells for content changes
-            // (delivery state, reactions, typing indicator updates, etc.)
-            // Use the diffable data source's reconfigure API which is safe
-            // during layout passes, unlike UITableView.reconfigureRows.
-            coordinator.rowsByID = Dictionary(uniqueKeysWithValues: newInverted.map { ($0.id, $0) })
+            coordinator.rowsByID = Dictionary(uniqueKeysWithValues: newRows.map { ($0.id, $0) })
             var snapshot = dataSource.snapshot()
-            let visibleIDs = tableView.indexPathsForVisibleRows?
-                .compactMap { snapshot.itemIdentifiers(inSection: 0).indices.contains($0.row) ? snapshot.itemIdentifiers(inSection: 0)[$0.row] : nil }
-                ?? []
+            let visibleIDs = collectionView.indexPathsForVisibleItems
+                .sorted { lhs, rhs in
+                    if lhs.section == rhs.section {
+                        return lhs.item < rhs.item
+                    }
+                    return lhs.section < rhs.section
+                }
+                .compactMap { dataSource.itemIdentifier(for: $0) }
             if !visibleIDs.isEmpty {
                 snapshot.reconfigureItems(visibleIDs)
                 dataSource.apply(snapshot, animatingDifferences: false)
             }
         }
 
-        // Handle external scroll-to-bottom trigger.
         if scrollToBottomTrigger != coordinator.lastScrollToBottomTrigger {
             coordinator.lastScrollToBottomTrigger = scrollToBottomTrigger
             coordinator.scrollToBottom(animated: true)
@@ -128,41 +124,43 @@ struct InvertedMessageList: UIViewRepresentable {
         }
     }
 
-    /// Build the inverted row array: reversed timeline rows, plus typing indicator at index 0.
-    private func buildInvertedRows() -> [InvertedRow] {
-        var result: [InvertedRow] = []
-
-        // Typing indicator at index 0 (visually at the bottom of the chat).
-        if !chat.typingMembers.isEmpty {
-            result.append(.typing)
-        }
-
-        // Timeline rows in reverse (newest first for the inverted table).
-        for row in rows.reversed() {
-            result.append(.timeline(row))
-        }
-
-        return result
+    private static func makeLayout() -> UICollectionViewLayout {
+        let itemSize = NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(1.0),
+            heightDimension: .estimated(44)
+        )
+        let item = NSCollectionLayoutItem(layoutSize: itemSize)
+        let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
+        let section = NSCollectionLayoutSection(group: group)
+        section.interGroupSpacing = 0
+        return UICollectionViewCompositionalLayout(section: section)
     }
 
-    // MARK: - Coordinator
+    private func buildRenderedRows() -> [RenderedRow] {
+        var rendered = rows.map(RenderedRow.timeline)
+        if !chat.typingMembers.isEmpty {
+            rendered.append(.typing)
+        }
+        return rendered
+    }
 
-    final class Coordinator: NSObject, UITableViewDelegate {
-        var parent: InvertedMessageList
-        var dataSource: UITableViewDiffableDataSource<Int, String>?
-        var rowsByID: [String: InvertedRow] = [:]
+    final class Coordinator: NSObject, UICollectionViewDelegate {
+        var parent: MessageCollectionList
+        var dataSource: UICollectionViewDiffableDataSource<Int, String>?
+        var cellRegistration: UICollectionView.CellRegistration<UICollectionViewCell, String>?
+        var rowsByID: [String: RenderedRow] = [:]
         var currentIDs: [String] = []
-        weak var tableView: UITableView?
+        weak var collectionView: UICollectionView?
         var lastScrollToBottomTrigger: Int = 0
         private var requestedOldestId: String?
-        private var lastAppliedLayoutMetrics: InvertedMessageListLayoutMetrics?
+        private var lastAppliedLayoutMetrics: MessageCollectionLayoutMetrics?
 
-        init(parent: InvertedMessageList) {
+        init(parent: MessageCollectionList) {
             self.parent = parent
             self.lastScrollToBottomTrigger = parent.scrollToBottomTrigger
         }
 
-        func applyRows(_ rows: [InvertedRow], animated: Bool, completion: (() -> Void)? = nil) {
+        func applyRows(_ rows: [RenderedRow], animated: Bool, completion: (() -> Void)? = nil) {
             currentIDs = rows.map(\.id)
             rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
 
@@ -175,10 +173,13 @@ struct InvertedMessageList: UIViewRepresentable {
         }
 
         func scrollToBottom(animated: Bool) {
-            guard let tableView else { return }
-            tableView.setContentOffset(
-                InvertedMessageListLayout.bottomContentOffset(
-                    adjustedTopInset: tableView.adjustedContentInset.top
+            guard let collectionView else { return }
+            collectionView.layoutIfNeeded()
+            collectionView.setContentOffset(
+                MessageCollectionLayout.bottomContentOffset(
+                    contentHeight: collectionView.contentSize.height,
+                    boundsHeight: collectionView.bounds.height,
+                    adjustedInsets: collectionView.adjustedContentInset
                 ),
                 animated: animated
             )
@@ -186,27 +187,69 @@ struct InvertedMessageList: UIViewRepresentable {
 
         @discardableResult
         func applyLayoutMetricsIfNeeded() -> Bool {
-            guard let tableView else { return false }
+            guard let collectionView else { return false }
 
-            let metrics = InvertedMessageListLayout.metrics(
+            let metrics = MessageCollectionLayout.metrics(
                 visualTopReserve: parent.visualTopInset,
                 visualBottomReserve: parent.visualBottomInset,
-                safeAreaInsets: tableView.safeAreaInsets
+                safeAreaInsets: collectionView.safeAreaInsets
             )
-
             guard metrics != lastAppliedLayoutMetrics else { return false }
             lastAppliedLayoutMetrics = metrics
-            tableView.contentInset = metrics.contentInset
-            tableView.scrollIndicatorInsets = metrics.scrollIndicatorInsets
+            collectionView.contentInset = metrics.contentInset
+            collectionView.scrollIndicatorInsets = metrics.scrollIndicatorInsets
             return true
         }
 
-        // MARK: Delegate — Pagination
+        func captureTopAnchor() -> ScrollAnchor? {
+            guard let collectionView,
+                  let dataSource,
+                  let indexPath = collectionView.indexPathsForVisibleItems.min(by: { lhs, rhs in
+                      if lhs.section == rhs.section {
+                          return lhs.item < rhs.item
+                      }
+                      return lhs.section < rhs.section
+                  }),
+                  let itemID = dataSource.itemIdentifier(for: indexPath),
+                  let attributes = collectionView.layoutAttributesForItem(at: indexPath)
+            else { return nil }
 
-        func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-            let snapshot = dataSource?.snapshot()
-            let rowCount = snapshot?.numberOfItems ?? 0
-            guard rowCount > 0, indexPath.row >= rowCount - 3 else { return }
+            return ScrollAnchor(
+                itemID: itemID,
+                distanceFromContentOffset: attributes.frame.minY - collectionView.contentOffset.y
+            )
+        }
+
+        func restore(anchor: ScrollAnchor) {
+            guard let collectionView,
+                  let dataSource,
+                  let indexPath = dataSource.indexPath(for: anchor.itemID)
+            else { return }
+
+            collectionView.layoutIfNeeded()
+            collectionView.scrollToItem(at: indexPath, at: .top, animated: false)
+            collectionView.layoutIfNeeded()
+
+            guard let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
+
+            let minOffsetY = -collectionView.adjustedContentInset.top
+            let maxOffsetY = max(
+                minOffsetY,
+                collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+            )
+            let targetY = min(
+                max(attributes.frame.minY - anchor.distanceFromContentOffset, minOffsetY),
+                maxOffsetY
+            )
+            collectionView.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            willDisplay cell: UICollectionViewCell,
+            forItemAt indexPath: IndexPath
+        ) {
+            guard indexPath.item <= 2 else { return }
             guard parent.chat.canLoadOlder else { return }
 
             let oldestMessageId = parent.chat.messages.first?.id
@@ -215,22 +258,12 @@ struct InvertedMessageList: UIViewRepresentable {
             parent.onLoadOlderMessages?()
         }
 
-        // MARK: Delegate — Status Bar Tap
-
-        func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-            let maxOffset = scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
-            if maxOffset > 0 {
-                scrollView.setContentOffset(CGPoint(x: 0, y: maxOffset), animated: true)
-            }
-            return false
-        }
-
-        // MARK: Delegate — Scroll Tracking
-
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            let nearBottom = InvertedMessageListLayout.isNearBottom(
+            let nearBottom = MessageCollectionLayout.isNearBottom(
                 contentOffsetY: scrollView.contentOffset.y,
-                adjustedTopInset: scrollView.adjustedContentInset.top
+                boundsHeight: scrollView.bounds.height,
+                contentHeight: scrollView.contentSize.height,
+                adjustedInsets: scrollView.adjustedContentInset
             )
             if parent.isAtBottom != nearBottom {
                 DispatchQueue.main.async {
@@ -245,9 +278,11 @@ struct InvertedMessageList: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            let nearBottom = InvertedMessageListLayout.isNearBottom(
+            let nearBottom = MessageCollectionLayout.isNearBottom(
                 contentOffsetY: scrollView.contentOffset.y,
-                adjustedTopInset: scrollView.adjustedContentInset.top
+                boundsHeight: scrollView.bounds.height,
+                contentHeight: scrollView.contentSize.height,
+                adjustedInsets: scrollView.adjustedContentInset
             )
             if !nearBottom && parent.shouldStickToBottom {
                 DispatchQueue.main.async {
@@ -267,9 +302,11 @@ struct InvertedMessageList: UIViewRepresentable {
         }
 
         private func updateStickyAfterScroll(_ scrollView: UIScrollView) {
-            let nearBottom = InvertedMessageListLayout.isNearBottom(
+            let nearBottom = MessageCollectionLayout.isNearBottom(
                 contentOffsetY: scrollView.contentOffset.y,
-                adjustedTopInset: scrollView.adjustedContentInset.top
+                boundsHeight: scrollView.bounds.height,
+                contentHeight: scrollView.contentSize.height,
+                adjustedInsets: scrollView.adjustedContentInset
             )
             if nearBottom != parent.shouldStickToBottom {
                 DispatchQueue.main.async {
@@ -278,10 +315,8 @@ struct InvertedMessageList: UIViewRepresentable {
             }
         }
 
-        // MARK: Row Content Builder
-
         @ViewBuilder
-        func rowContent(for row: InvertedRow, parent: InvertedMessageList) -> some View {
+        func rowContent(for row: RenderedRow, parent: MessageCollectionList) -> some View {
             switch row {
             case .typing:
                 TypingIndicatorRow(
@@ -301,8 +336,8 @@ struct InvertedMessageList: UIViewRepresentable {
                             onSendMessage: parent.onSendMessage,
                             replyTargetsById: parent.messagesById,
                             onTapSender: parent.onTapSender,
-                            onJumpToMessage: { [self] messageId in
-                                jumpToMessage(messageId)
+                            onJumpToMessage: { [self] messageID in
+                                jumpToMessage(messageID)
                             },
                             onReact: parent.onReact,
                             activeReactionMessageId: .constant(parent.activeReactionMessageId),
@@ -323,23 +358,28 @@ struct InvertedMessageList: UIViewRepresentable {
             }
         }
 
-        func jumpToMessage(_ messageId: String) {
-            guard let dataSource, let tableView else { return }
+        func jumpToMessage(_ messageID: String) {
+            guard let dataSource,
+                  let collectionView else { return }
+
             let snapshot = dataSource.snapshot()
-            let items = snapshot.itemIdentifiers
-            guard let index = items.firstIndex(where: { id in
-                if let row = rowsByID[id], case .timeline(let tr) = row,
-                   case .messageGroup(let group) = tr {
-                    return group.messages.contains { $0.id == messageId }
-                }
-                return false
-            }) else { return }
-            tableView.scrollToRow(at: IndexPath(row: index, section: 0), at: .middle, animated: true)
+            guard let rowID = snapshot.itemIdentifiers.first(where: { rowID in
+                guard let row = rowsByID[rowID],
+                      case .timeline(let timelineRow) = row,
+                      case .messageGroup(let group) = timelineRow
+                else { return false }
+
+                return group.messages.contains { $0.id == messageID }
+            }),
+            let indexPath = dataSource.indexPath(for: rowID)
+            else { return }
+
+            collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
         }
     }
 }
 
-private final class InsetAwareTableView: UITableView {
+private final class InsetAwareCollectionView: UICollectionView {
     var onLayoutChange: (() -> Void)?
 
     override func layoutSubviews() {
@@ -353,17 +393,21 @@ private final class InsetAwareTableView: UITableView {
     }
 }
 
-// MARK: - InvertedRow
+struct ScrollAnchor {
+    let itemID: String
+    let distanceFromContentOffset: CGFloat
+}
 
-/// Wrapper enum to unify timeline rows and the typing indicator in a single data source.
-enum InvertedRow: Identifiable {
+enum RenderedRow: Identifiable {
     case typing
     case timeline(ChatView.ChatTimelineRow)
 
     var id: String {
         switch self {
-        case .typing: return "typing-indicator"
-        case .timeline(let row): return row.id
+        case .typing:
+            return "typing-indicator"
+        case .timeline(let row):
+            return row.id
         }
     }
 }
