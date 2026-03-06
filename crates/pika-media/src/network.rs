@@ -115,7 +115,7 @@ impl NetworkRelay {
             .send(Command::Connect { reply: reply_tx })
             .map_err(|_| MediaSessionError::NotConnected)?;
         reply_rx
-            .recv()
+            .recv_timeout(Duration::from_secs(10))
             .map_err(|_| MediaSessionError::NotConnected)?
     }
 
@@ -134,7 +134,7 @@ impl NetworkRelay {
             })
             .map_err(|_| MediaSessionError::NotConnected)?;
         reply_rx
-            .recv()
+            .recv_timeout(Duration::from_secs(5))
             .map_err(|_| MediaSessionError::NotConnected)?
     }
 
@@ -151,7 +151,7 @@ impl NetworkRelay {
             })
             .map_err(|_| MediaSessionError::NotConnected)?;
         let parts = reply_rx
-            .recv()
+            .recv_timeout(Duration::from_secs(10))
             .map_err(|_| MediaSessionError::NotConnected)??;
 
         // Keep the worker thread (and its tokio runtime) alive for as long as the subscription
