@@ -376,6 +376,7 @@ private func screenView(
                         manager.dispatch(.closePeerProfile)
                     },
                     onStartCall: {
+                        onSetPendingPeerProfileAction(nil)
                         if let directChatId {
                             manager.dispatch(.startCall(chatId: directChatId))
                         } else {
@@ -385,6 +386,7 @@ private func screenView(
                         manager.dispatch(.closePeerProfile)
                     },
                     onStartVideoCall: {
+                        onSetPendingPeerProfileAction(nil)
                         if let directChatId {
                             manager.dispatch(.startVideoCall(chatId: directChatId))
                         } else {
@@ -561,13 +563,17 @@ private func myNpub(from state: AppState) -> String? {
 
 @MainActor
 private func directMessageChatId(for profile: PeerProfileState, in state: AppState) -> String? {
-    guard let currentChat = state.currentChat,
-          !currentChat.isGroup,
-          currentChat.members.first?.pubkey == profile.pubkey else {
-        return nil
+    let matchesProfile: ([MemberInfo]) -> Bool = { members in
+        members.contains { $0.pubkey == profile.pubkey }
     }
 
-    return currentChat.chatId
+    if let currentChat = state.currentChat,
+       !currentChat.isGroup,
+       matchesProfile(currentChat.members) {
+        return currentChat.chatId
+    }
+
+    return state.chatList.first(where: { !$0.isGroup && matchesProfile($0.members) })?.chatId
 }
 
 @MainActor

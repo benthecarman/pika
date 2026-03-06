@@ -1,5 +1,3 @@
-import CoreImage
-import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UIKit
 
@@ -12,11 +10,39 @@ struct PeerProfileSheet: View {
     let onUnfollow: @MainActor () -> Void
     let onOpenMediaGallery: (@MainActor () -> Void)?
     let onClose: @MainActor () -> Void
+    private let cachedProfileQr: UIImage?
 
     @Environment(\.dismiss) private var dismiss
     @State private var didCopyNpub = false
     @State private var copyResetTask: Task<Void, Never>?
     @State private var showCallPermissionDeniedAlert = false
+    @State private var attemptedCallType: AttemptedCallType = .audio
+
+    private enum AttemptedCallType {
+        case audio
+        case video
+    }
+
+    init(
+        profile: PeerProfileState,
+        onMessage: @MainActor @escaping () -> Void,
+        onStartCall: @MainActor @escaping () -> Void,
+        onStartVideoCall: @MainActor @escaping () -> Void,
+        onFollow: @MainActor @escaping () -> Void,
+        onUnfollow: @MainActor @escaping () -> Void,
+        onOpenMediaGallery: (@MainActor () -> Void)?,
+        onClose: @MainActor @escaping () -> Void
+    ) {
+        self.profile = profile
+        self.onMessage = onMessage
+        self.onStartCall = onStartCall
+        self.onStartVideoCall = onStartVideoCall
+        self.onFollow = onFollow
+        self.onUnfollow = onUnfollow
+        self.onOpenMediaGallery = onOpenMediaGallery
+        self.onClose = onClose
+        self.cachedProfileQr = QRCodeImage.make(from: profile.npub)
+    }
 
     var body: some View {
         NavigationStack {
@@ -45,6 +71,7 @@ struct PeerProfileSheet: View {
                             .background(Color(.tertiarySystemFill), in: Circle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Close profile")
                 }
             }
             .onDisappear {
@@ -53,8 +80,17 @@ struct PeerProfileSheet: View {
             .alert("Permission Needed", isPresented: $showCallPermissionDeniedAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("Microphone and camera permissions are required for calls.")
+                Text(permissionDeniedMessage)
             }
+        }
+    }
+
+    private var permissionDeniedMessage: String {
+        switch attemptedCallType {
+        case .audio:
+            return "Microphone permission is required for voice calls."
+        case .video:
+            return "Microphone and camera permissions are required for video calls."
         }
     }
 
@@ -94,6 +130,7 @@ struct PeerProfileSheet: View {
                 }
 
                 NativeQuickActionButton(title: "Voice", systemImage: "phone") {
+                    attemptedCallType = .audio
                     CallPermissionActions.withMicPermission(
                         onDenied: { showCallPermissionDeniedAlert = true },
                         action: onStartCall
@@ -101,6 +138,7 @@ struct PeerProfileSheet: View {
                 }
 
                 NativeQuickActionButton(title: "Video", systemImage: "video") {
+                    attemptedCallType = .video
                     CallPermissionActions.withMicAndCameraPermission(
                         onDenied: { showCallPermissionDeniedAlert = true },
                         action: onStartVideoCall
@@ -139,7 +177,7 @@ struct PeerProfileSheet: View {
     @ViewBuilder
     private var shareSection: some View {
         Section {
-            if let img = qrImage(from: profile.npub) {
+            if let img = cachedProfileQr {
                 Image(uiImage: img)
                     .interpolation(.none)
                     .resizable()
@@ -184,18 +222,7 @@ struct PeerProfileSheet: View {
         } header: {
             Text("Profile Code")
         } footer: {
-            Text("Use this code to start a conversation.")
+            Text("Use this profile code to start a conversation.")
         }
-    }
-
-    private func qrImage(from text: String) -> UIImage? {
-        let data = Data(text.utf8)
-        let filter = CIFilter.qrCodeGenerator()
-        filter.setValue(data, forKey: "inputMessage")
-        guard var output = filter.outputImage else { return nil }
-        output = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let ctx = CIContext()
-        guard let cg = ctx.createCGImage(output, from: output.extent) else { return nil }
-        return UIImage(cgImage: cg)
     }
 }

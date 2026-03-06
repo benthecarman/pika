@@ -1,5 +1,3 @@
-import CoreImage
-import CoreImage.CIFilterBuiltins
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -17,6 +15,7 @@ struct MyNpubQrSheet: View {
     let onWipeProfileCache: @MainActor () -> Void
     let onWipeMediaCache: @MainActor () -> Void
     let onWipeLocalData: @MainActor () -> Void
+    private let cachedNpubQr: UIImage?
 
     @Environment(\.dismiss) private var dismiss
     @State private var showNsec = false
@@ -65,6 +64,7 @@ struct MyNpubQrSheet: View {
         self.onWipeProfileCache = onWipeProfileCache
         self.onWipeMediaCache = onWipeMediaCache
         self.onWipeLocalData = onWipeLocalData
+        self.cachedNpubQr = QRCodeImage.make(from: npub)
         self._showLogoutConfirm = State(initialValue: showLogoutConfirm)
     }
 
@@ -100,7 +100,7 @@ struct MyNpubQrSheet: View {
     @ViewBuilder
     private var shareProfileSection: some View {
         Section {
-            if let img = qrImage(from: npub) {
+            if let img = cachedNpubQr {
                 Image(uiImage: img)
                     .interpolation(.none)
                     .resizable()
@@ -121,6 +121,7 @@ struct MyNpubQrSheet: View {
             publicKeyRow(
                 npub,
                 copied: didCopyNpub,
+                valueTestId: TestIds.chatListMyNpubValue,
                 testId: TestIds.chatListMyNpubCopy,
                 accessibilityLabel: didCopyNpub ? "Copied code" : "Copy code"
             ) {
@@ -129,7 +130,7 @@ struct MyNpubQrSheet: View {
         } header: {
             Text("Profile Code")
         } footer: {
-            Text("Share this code so people can start a conversation with you.")
+            Text("Share your profile code so people can start a conversation with you.")
         }
     }
 
@@ -161,6 +162,8 @@ struct MyNpubQrSheet: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier(TestIds.myNpubNsecToggle)
+                    .accessibilityLabel(showNsec ? "Hide account private key" : "Show account private key")
+                    .accessibilityHint("Reveals or hides your account private key.")
 
                     copyIconButton(
                         copied: didCopyNsec,
@@ -175,7 +178,7 @@ struct MyNpubQrSheet: View {
         } header: {
             Text("Account Private Key")
         } footer: {
-            Text("Keep this private. Anyone with your account key can message as you.")
+            Text("Keep this private. Anyone with your account private key can message as you.")
         }
     }
 
@@ -246,6 +249,8 @@ struct MyNpubQrSheet: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier(TestIds.chatListMyNpubClose)
+                    .accessibilityLabel("Close profile")
+                    .accessibilityHint("Dismisses the profile sheet.")
                 }
             }
             .task {
@@ -313,6 +318,8 @@ struct MyNpubQrSheet: View {
                         .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Change profile photo")
+                .accessibilityHint("Opens your photo library.")
                 .offset(x: -4, y: -4)
             }
             .frame(maxWidth: .infinity)
@@ -419,6 +426,7 @@ struct MyNpubQrSheet: View {
     private func publicKeyRow(
         _ value: String,
         copied: Bool,
+        valueTestId: String,
         testId: String,
         accessibilityLabel: String,
         onCopy: @escaping () -> Void
@@ -429,7 +437,7 @@ struct MyNpubQrSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier(TestIds.chatListMyNpubValue)
+                .accessibilityIdentifier(valueTestId)
 
             copyIconButton(
                 copied: copied,
@@ -534,32 +542,6 @@ struct MyNpubQrSheet: View {
         }
     }
 
-    @ViewBuilder
-    private func copyAccessory(
-        copied: Bool,
-        testId: String,
-        accessibilityLabel: String,
-        onCopy: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 8) {
-            if copied {
-                Text("Copied")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
-            }
-
-            Button(action: onCopy) {
-                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
-                    .font(.body.weight(.semibold))
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .accessibilityIdentifier(testId)
-            .accessibilityLabel(accessibilityLabel)
-        }
-        .animation(.easeInOut(duration: 0.15), value: copied)
-    }
-
     private func handlePhotoSelection(_ item: PhotosPickerItem?) {
         guard let item else { return }
         isLoadingPhoto = true
@@ -584,17 +566,6 @@ struct MyNpubQrSheet: View {
 
     private func normalized(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func qrImage(from text: String) -> UIImage? {
-        let data = Data(text.utf8)
-        let filter = CIFilter.qrCodeGenerator()
-        filter.setValue(data, forKey: "inputMessage")
-        guard var output = filter.outputImage else { return nil }
-        output = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let ctx = CIContext()
-        guard let cg = ctx.createCGImage(output, from: output.extent) else { return nil }
-        return UIImage(cgImage: cg)
     }
 }
 

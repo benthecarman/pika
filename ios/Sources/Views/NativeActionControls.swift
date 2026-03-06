@@ -7,7 +7,17 @@ struct NativeQuickActionButton: View {
     var accessibilityIdentifier: String?
     let action: () -> Void
 
+    @ViewBuilder
     var body: some View {
+        if let accessibilityIdentifier, !accessibilityIdentifier.isEmpty {
+            baseButton
+                .accessibilityIdentifier(accessibilityIdentifier)
+        } else {
+            baseButton
+        }
+    }
+
+    private var baseButton: some View {
         Button(action: action) {
             VStack(spacing: 10) {
                 Image(systemName: systemImage)
@@ -27,7 +37,6 @@ struct NativeQuickActionButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier(accessibilityIdentifier ?? "")
     }
 
     private var backgroundStyle: Color {

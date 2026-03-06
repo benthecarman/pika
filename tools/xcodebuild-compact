@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = Path(os.environ.get("PIKA_XCODEBUILD_LOG_DIR", ROOT / "ios" / "build-logs"))
-DIAG_RE = re.compile(r"^.+:\d+:\d+: (?P<level>error|warning|note): ")
+DIAG_RE = re.compile(r"^.+:\d+:\d+: (?P<level>fatal error|error|warning|note): ")
 
 
 def print_err(message: str) -> None:
@@ -26,7 +26,10 @@ def render_failure(log_path: Path) -> None:
         return
 
     diag_indexes = [idx for idx, line in enumerate(lines) if DIAG_RE.match(line)]
-    error_indexes = [idx for idx in diag_indexes if ": error: " in lines[idx]]
+    error_indexes = [
+        idx for idx in diag_indexes
+        if DIAG_RE.match(lines[idx]) and DIAG_RE.match(lines[idx]).group("level") in {"error", "fatal error"}
+    ]
 
     if not error_indexes:
         print_err("error: xcodebuild failed, but no Swift compiler diagnostics were extracted")
@@ -71,7 +74,11 @@ def render_failure(log_path: Path) -> None:
 def main() -> int:
     verbose = os.environ.get("PIKA_XCODEBUILD_VERBOSE", "0") == "1"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print_err(f"error: failed to create xcodebuild log directory {LOG_DIR}: {exc}")
+        return 2
     log_path = LOG_DIR / f"xcodebuild-{timestamp}.log"
 
     cmd = [str(ROOT / "tools" / "xcode-run"), "xcodebuild"]
@@ -81,14 +88,23 @@ def main() -> int:
     cmd.extend(args)
 
     print_err(f"xcodebuild: writing full log to {log_path}")
-    proc = subprocess.run(
-        cmd,
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    log_path.write_text(proc.stdout or "", encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as exc:
+        print_err(f"error: failed to launch xcodebuild: {exc}")
+        return 2
+
+    try:
+        log_path.write_text(proc.stdout or "", encoding="utf-8")
+    except OSError as exc:
+        print_err(f"error: failed to write xcodebuild log {log_path}: {exc}")
+        return 2
 
     if proc.returncode == 0:
         warning_count = len(re.findall(r"^.+:\d+:\d+: warning: ", proc.stdout or "", flags=re.MULTILINE))

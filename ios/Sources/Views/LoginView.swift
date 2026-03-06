@@ -12,6 +12,14 @@ struct LoginView: View {
     @State private var bunkerUriInput = ""
     @State private var showAdvanced = false
 
+    private var trimmedNsecInput: String {
+        nsecInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedBunkerUriInput: String {
+        bunkerUriInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var body: some View {
         let createBusy = state.creatingAccount
         let loginBusy = state.loggingIn
@@ -58,10 +66,10 @@ struct LoginView: View {
                 .disabled(anyBusy)
                 .accessibilityIdentifier(TestIds.loginCreateAccount)
             } footer: {
-                Text("Or sign in with your private key.")
+                Text("Or sign in with your account private key.")
             }
 
-            Section("Private Key") {
+            Section("Account Private Key") {
                 HStack(spacing: 12) {
                     SecureField("Enter your private key (nsec123...)", text: $nsecInput)
                         .textInputAutocapitalization(.never)
@@ -79,7 +87,7 @@ struct LoginView: View {
                 }
 
                 Button {
-                    onLogin(nsecInput)
+                    onLogin(trimmedNsecInput)
                 } label: {
                     if loginBusy {
                         ProgressView()
@@ -90,7 +98,7 @@ struct LoginView: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .disabled(anyBusy || nsecInput.isEmpty)
+                .disabled(anyBusy || trimmedNsecInput.isEmpty)
                 .accessibilityIdentifier(TestIds.loginSubmit)
             }
 
@@ -103,7 +111,7 @@ struct LoginView: View {
                         .accessibilityIdentifier(TestIds.loginBunkerUriInput)
 
                     Button {
-                        onBunkerLogin(bunkerUriInput)
+                        onBunkerLogin(trimmedBunkerUriInput)
                     } label: {
                         if loginBusy {
                             ProgressView()
@@ -115,7 +123,7 @@ struct LoginView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
-                    .disabled(anyBusy || bunkerUriInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(anyBusy || trimmedBunkerUriInput.isEmpty)
                     .accessibilityIdentifier(TestIds.loginBunkerSubmit)
 
                     Button {

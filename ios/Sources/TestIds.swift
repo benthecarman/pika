@@ -39,6 +39,7 @@ enum TestIds {
     // New group chat
     static let newGroupName = "newgroup_name"
     static let newGroupPeerNpub = "newgroup_peer_npub"
+    static let newGroupPasteCode = "newgroup_paste_code"
     static let newGroupAddMember = "newgroup_add_member"
     static let newGroupCreate = "newgroup_create"
     static let newGroupManualEntry = "newgroup_manual_entry"

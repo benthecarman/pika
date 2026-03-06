@@ -57,6 +57,7 @@ struct NewGroupChatView: View {
                 } label: {
                     Image(systemName: "keyboard")
                 }
+                .disabled(isLoading)
                 .accessibilityIdentifier(TestIds.newGroupManualEntry)
             }
         }
@@ -75,7 +76,9 @@ struct NewGroupChatView: View {
                 handleIncomingPeer(scanned)
             }
         }
-        .sheet(isPresented: $showManualEntrySheet) {
+        .sheet(isPresented: $showManualEntrySheet, onDismiss: {
+            npubInput = ""
+        }) {
             manualEntrySheet(isLoading: isLoading)
         }
         .alert("Invalid code", isPresented: $showInvalidNpubAlert) {
@@ -113,7 +116,7 @@ struct NewGroupChatView: View {
                     title: "Paste Code",
                     systemImage: "doc.on.clipboard",
                     isPrimary: true,
-                    accessibilityIdentifier: TestIds.newGroupAddMember
+                    accessibilityIdentifier: TestIds.newGroupPasteCode
                 ) {
                     handlePaste()
                 }
@@ -285,19 +288,21 @@ struct NewGroupChatView: View {
         .padding(.vertical, 20)
     }
 
-    private func handleIncomingPeer(_ input: String) {
+    @discardableResult
+    private func handleIncomingPeer(_ input: String) -> Bool {
         let normalized = normalizePeerKey(input: input)
         guard isValidPeerKey(input: normalized) else {
             invalidNpubMessage = "Paste or scan a valid code (npub1… or 64-character hex public key)."
             showInvalidNpubAlert = true
-            return
+            return false
         }
         if !selectedNpubs.contains(normalized) {
             selectedNpubs.append(normalized)
-            return
+            return true
         }
         invalidNpubMessage = "That person is already selected."
         showInvalidNpubAlert = true
+        return false
     }
 
     private func manualEntrySheet(isLoading: Bool) -> some View {
@@ -315,8 +320,7 @@ struct NewGroupChatView: View {
 
                     Button("Add Member") {
                         let peer = normalizePeerKey(input: npubInput)
-                        handleIncomingPeer(peer)
-                        if isValidPeerKey(input: peer), selectedNpubs.contains(peer) {
+                        if handleIncomingPeer(peer) {
                             npubInput = ""
                             showManualEntrySheet = false
                         }
@@ -330,6 +334,7 @@ struct NewGroupChatView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        npubInput = ""
                         showManualEntrySheet = false
                     }
                 }

@@ -75,7 +75,9 @@ struct NewChatView: View {
                 handleIncomingPeer(scanned)
             }
         }
-        .sheet(isPresented: $showManualEntrySheet) {
+        .sheet(isPresented: $showManualEntrySheet, onDismiss: {
+            npubInput = ""
+        }) {
             manualEntrySheet(isLoading: isLoading)
         }
         .alert("Invalid code", isPresented: $showInvalidNpubAlert) {
@@ -227,6 +229,7 @@ struct NewChatView: View {
                         let peer = normalizePeerKey(input: npubInput)
                         handleIncomingPeer(peer)
                         if isValidPeerKey(input: peer) {
+                            npubInput = ""
                             showManualEntrySheet = false
                         }
                     }
@@ -239,6 +242,7 @@ struct NewChatView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        npubInput = ""
                         showManualEntrySheet = false
                     }
                 }
