@@ -2889,6 +2889,7 @@ impl AppCore {
         if logged_in {
             self.call_runtime.stop_all();
             self.cancel_call_duration_ticks();
+            self.cancel_call_offer_timeout();
             self.cancel_voice_recording_ticks();
             self.state.router.default_screen = Screen::ChatList;
             self.state.router.screen_stack.clear();
@@ -2899,6 +2900,7 @@ impl AppCore {
         } else {
             self.call_runtime.stop_all();
             self.cancel_call_duration_ticks();
+            self.cancel_call_offer_timeout();
             self.cancel_voice_recording_ticks();
             self.state.router.default_screen = Screen::Login;
             self.state.router.screen_stack.clear();
@@ -2950,6 +2952,7 @@ impl AppCore {
         self.state.developer_mode = false;
         self.state.voice_recording = None;
         self.cancel_call_duration_ticks();
+        self.cancel_call_offer_timeout();
         self.cancel_voice_recording_ticks();
 
         let root = std::path::Path::new(&self.data_dir);

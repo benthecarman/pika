@@ -639,12 +639,14 @@ private func callPeerDisplayName(for call: CallState, in state: AppState) -> Str
 @MainActor
 private func callPeerPictureUrl(for call: CallState, in state: AppState) -> String? {
     if let currentChat = state.currentChat, currentChat.chatId == call.chatId {
+        if currentChat.isGroup { return nil }
         if let peer = currentChat.members.first {
             return peer.pictureUrl
         }
     }
 
     if let summary = state.chatList.first(where: { $0.chatId == call.chatId }) {
+        if summary.isGroup { return nil }
         if let peer = summary.members.first {
             return peer.pictureUrl
         }
