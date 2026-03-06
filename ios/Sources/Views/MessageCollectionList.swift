@@ -34,7 +34,7 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
     var onRetryMessage: ((String) -> Void)?
     var onLoadOlderMessages: (() -> Void)?
 
-    @Binding var bottomViewportInset: CGFloat
+    @Binding var accessoryHeight: CGFloat
     @Binding var followsBottom: Bool
     var activeReactionMessageId: String?
     var scrollRequest: MessageCollectionScrollRequest?
@@ -414,7 +414,7 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
         private func applyEffectiveInsetsIfNeeded() -> Bool {
             guard let collectionView, let viewController else { return false }
             collectionView.layoutIfNeeded()
-            syncBottomViewportInset(viewController.bottomViewportInset)
+            syncAccessoryHeight(viewController.accessoryHeight)
 
             let effectiveInset = MessageCollectionLayout.effectiveContentInset(
                 boundsHeight: collectionView.bounds.height,
@@ -428,11 +428,12 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
             return true
         }
 
-        private func syncBottomViewportInset(_ inset: CGFloat) {
-            guard abs(inset - parent.bottomViewportInset) > 0.5 else { return }
+        private func syncAccessoryHeight(_ height: CGFloat) {
+            guard abs(height - parent.accessoryHeight) > 0.5 else { return }
             DispatchQueue.main.async {
-                guard abs(inset - self.parent.bottomViewportInset) > 0.5 else { return }
-                self.parent.bottomViewportInset = inset
+                if abs(height - self.parent.accessoryHeight) > 0.5 {
+                    self.parent.accessoryHeight = height
+                }
             }
         }
 
@@ -452,9 +453,12 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
     private var lastReportedBottomViewportInset: CGFloat = 0
 
     var bottomViewportInset: CGFloat {
-        accessoryContainerView.currentHeight + keyboardOverlapHeight
+        max(accessoryContainerView.currentHeight, keyboardOverlapHeight)
     }
 
+    var accessoryHeight: CGFloat {
+        accessoryContainerView.currentHeight
+    }
     init(layout: UICollectionViewLayout, accessoryContent: AccessoryContent) {
         self.collectionView = BoundsAwareCollectionView(frame: .zero, collectionViewLayout: layout)
         self.accessoryContainerView = InputAccessoryHostingView(rootView: accessoryContent)

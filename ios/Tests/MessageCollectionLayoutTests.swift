@@ -6,6 +6,10 @@ final class MessageCollectionLayoutTests: XCTestCase {
         XCTAssertEqual(MessageCollectionLayout.jumpButtonSpacing, 12)
     }
 
+    func testBottomContentSpacingAddsBreathingRoom() {
+        XCTAssertEqual(MessageCollectionLayout.bottomContentSpacing, 10)
+    }
+
     func testEffectiveContentInsetBottomAlignsShortChats() {
         let inset = MessageCollectionLayout.effectiveContentInset(
             boundsHeight: 600,
@@ -13,8 +17,8 @@ final class MessageCollectionLayoutTests: XCTestCase {
             bottomInset: 20
         )
 
-        XCTAssertEqual(inset.top, 400)
-        XCTAssertEqual(inset.bottom, 20)
+        XCTAssertEqual(inset.top, 390)
+        XCTAssertEqual(inset.bottom, 30)
     }
 
     func testNearBottomUsesVisibleViewportBottom() {

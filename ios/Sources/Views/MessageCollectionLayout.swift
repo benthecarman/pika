@@ -11,6 +11,7 @@ enum MessageCollectionUpdateKind: Equatable {
 }
 
 enum MessageCollectionLayout {
+    static let bottomContentSpacing: CGFloat = 10
     static let jumpButtonSpacing: CGFloat = 12
 
     static func effectiveContentInset(
@@ -18,12 +19,13 @@ enum MessageCollectionLayout {
         contentHeight: CGFloat,
         bottomInset: CGFloat
     ) -> UIEdgeInsets {
-        let availableHeight = max(0, boundsHeight - bottomInset)
+        let effectiveBottomInset = bottomInset + bottomContentSpacing
+        let availableHeight = max(0, boundsHeight - effectiveBottomInset)
         let extraTopInset = max(0, availableHeight - contentHeight)
         return UIEdgeInsets(
             top: extraTopInset,
             left: 0,
-            bottom: bottomInset,
+            bottom: effectiveBottomInset,
             right: 0
         )
     }

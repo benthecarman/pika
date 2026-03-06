@@ -47,7 +47,8 @@ struct ChatView: View {
     @State private var voiceRecorder: VoiceRecorder
     @State private var showMicPermissionDenied = false
     @State private var isInputFocused = false
-    @State private var transcriptBottomInset: CGFloat = 0
+    @State private var accessoryHeight: CGFloat = 0
+    @State private var baseAccessoryHeight: CGFloat = 0
 
     init(
         chatId: String,
@@ -113,9 +114,17 @@ struct ChatView: View {
             messageList(chat)
             .ignoresSafeArea(edges: [.top, .bottom])
             .overlay(alignment: .bottomTrailing) {
+                let baselineAccessoryHeight = baseAccessoryHeight > 0 ? baseAccessoryHeight : accessoryHeight
                 scrollToBottomButton(
-                    bottomPadding: transcriptBottomInset + MessageCollectionLayout.jumpButtonSpacing
+                    bottomPadding: MessageCollectionLayout.jumpButtonSpacing
+                        + max(0, accessoryHeight - baselineAccessoryHeight)
                 )
+            }
+        }
+        .onChangeCompat(of: accessoryHeight) { newHeight in
+            guard newHeight > 0 else { return }
+            if baseAccessoryHeight == 0 || newHeight < baseAccessoryHeight {
+                baseAccessoryHeight = newHeight
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -360,7 +369,7 @@ struct ChatView: View {
                     callback(chatId, oldestId, 30)
                 }
             },
-            bottomViewportInset: $transcriptBottomInset,
+            accessoryHeight: $accessoryHeight,
             followsBottom: $followsBottom,
             activeReactionMessageId: activeReactionMessageId,
             scrollRequest: scrollRequest
