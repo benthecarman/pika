@@ -802,7 +802,7 @@ screenshot-booted-ios OUT="":
     if [ -z "$out" ]; then
       out="/tmp/pika-ios-$(date +%Y%m%d-%H%M%S).png"
     fi
-    xcrun simctl io booted screenshot "$out" >/dev/null 2>&1
+    xcrun simctl io booted screenshot "$out" >/dev/null
     echo "$out"
 
 # Build-check the desktop ICED app.

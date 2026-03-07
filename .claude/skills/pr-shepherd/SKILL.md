@@ -157,7 +157,7 @@ Then go back to Step 1.
 
 ## Final Validation
 
-If any code changes were made during the loop, re-run the same validation lane chosen in pre-flight before reporting success. Use `nix develop -c just qa` only for Rust/shared scope. For Swift-only PRs, re-run `just ios-build-swift-sim`. For Android-only PRs, re-run `just android-assemble`.
+If any code changes were made during the loop, re-run `git diff --name-only origin/master...HEAD` and execute every validation lane that now matches the touched surface before reporting success. Use `nix develop -c just qa` for Rust/shared scope, `just ios-build-swift-sim` for iOS/Swift changes, and `just android-assemble` for Android changes.
 
 For visual verification of UI changes, record per-platform E2E test videos using the `/e2e-video` skill and upload them to blossom for the PR description.
 

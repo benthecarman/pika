@@ -3,8 +3,11 @@ import MarkdownUI
 import PhotosUI
 import AVFAudio
 import UniformTypeIdentifiers
+import os
 
 struct ChatView: View {
+    private static let logger = Logger(subsystem: "org.pikachat.pika", category: "ChatView")
+
     let chatId: String
     let state: ChatScreenState
     let voiceRecording: VoiceRecordingState?
@@ -801,20 +804,33 @@ struct ChatView: View {
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
-            let didStartAccess = url.startAccessingSecurityScopedResource()
-            defer { if didStartAccess { url.stopAccessingSecurityScopedResource() } }
-
-            guard let data = try? Data(contentsOf: url) else { return }
-
             let filename = url.lastPathComponent
             let caption = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !caption.isEmpty { messageText = "" }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let didStartAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didStartAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
 
-            // mime_type empty — Rust infers from filename extension
-            onSendMedia?(chatId, data, "", filename, caption)
+                do {
+                    let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                    DispatchQueue.main.async {
+                        if !caption.isEmpty {
+                            messageText = ""
+                        }
+
+                        // mime_type empty — Rust infers from filename extension
+                        onSendMedia?(chatId, data, "", filename, caption)
+                    }
+                } catch {
+                    Self.logger.error("File import read failed: \(error.localizedDescription)")
+                }
+            }
 
         case .failure(let error):
-            print("File import error: \(error.localizedDescription)")
+            Self.logger.error("File import failed: \(error.localizedDescription)")
         }
     }
 }

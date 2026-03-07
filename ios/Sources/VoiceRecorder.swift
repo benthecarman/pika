@@ -113,6 +113,7 @@ final class VoiceRecorder {
     func stopRecording() async -> URL? {
         guard isRecording else { return nil }
         if isUsingSimulatorFallback {
+            dispatchAction(.voiceRecordingStop)
             resetState()
             return nil
         }

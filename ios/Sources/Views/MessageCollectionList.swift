@@ -676,11 +676,16 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
             equalTo: view.keyboardLayoutGuide.topAnchor
         )
 
+        guard let bottomConstraint = jumpButtonBottomConstraint else {
+            assertionFailure("jumpButtonBottomConstraint should be configured before activation")
+            return
+        }
+
         NSLayoutConstraint.activate([
             jumpButtonChromeView.widthAnchor.constraint(equalToConstant: 36),
             jumpButtonChromeView.heightAnchor.constraint(equalToConstant: 36),
             jumpButtonChromeView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            jumpButtonBottomConstraint!,
+            bottomConstraint,
             jumpButton.centerXAnchor.constraint(equalTo: jumpButtonChromeView.contentView.centerXAnchor),
             jumpButton.centerYAnchor.constraint(equalTo: jumpButtonChromeView.contentView.centerYAnchor),
         ])
@@ -791,7 +796,7 @@ final class InputAccessoryHostingView<AccessoryContent: View>: UIInputView {
     }
 }
 
-fileprivate final class BoundsAwareCollectionView: UICollectionView {
+private final class BoundsAwareCollectionView: UICollectionView {
     var onBoundsSizeChange: ((CGSize) -> Void)?
     var onContentSizeChange: ((CGSize) -> Void)?
     private var lastReportedSize: CGSize = .zero
