@@ -202,31 +202,43 @@ Helpers:
 git checkout master
 git pull origin master
 
-# 2. If you want a coordinated cross-channel release, use:
-# just release-commit 0.5.2
-# git push origin master
-# then run the pikachat workflow_dispatch with version 0.5.2
-#
-# For a pikachat-only release instead, either:
-# - omit the argument to reuse repo-root VERSION
-# - or set PIKACHAT_ALLOW_VERSION_DRIFT=1 for an intentional version split
-PIKACHAT_ALLOW_VERSION_DRIFT=1 ./scripts/bump-pikachat.sh 0.5.2
+# 2. Preferred for coordinated releases after the version commit is on master:
+gh workflow run pikachat-release.yml -R sledtools/pika -f version=0.5.2
 
-# 3. Push commit and tag (this triggers the CI release)
-git push origin master pikachat-v0.5.2
-
-# 4. Monitor the release workflow
+# 3. Monitor the release workflow
 gh run list --limit 1
 gh run watch <run-id>
 
-# 5. Verify
+# 4. Verify
 gh release view pikachat-v0.5.2
 npm view pikachat-openclaw version
 ```
 
+Alternate path for a pikachat-only release from a clean `master` checkout:
+
+```bash
+# Reuse repo-root VERSION
+./scripts/bump-pikachat.sh
+
+# Or intentionally diverge from VERSION
+PIKACHAT_ALLOW_VERSION_DRIFT=1 ./scripts/bump-pikachat.sh 0.5.2
+
+git push origin master pikachat-v0.5.2
+```
+
 ### CI workflow
 
-`/.github/workflows/pikachat-release.yml` runs on `push.tags: ["pikachat-v*"]`.
+`/.github/workflows/pikachat-release.yml` runs on both:
+
+- `push.tags: ["pikachat-v*"]`
+- `workflow_dispatch`
+
+Recommended usage:
+
+- coordinated app + pikachat releases: use `workflow_dispatch` after the
+  version commit is merged to `master`
+- pikachat-only releases: use `./scripts/bump-pikachat.sh` and push the
+  `pikachat-vX.Y.Z` tag
 
 Jobs:
 

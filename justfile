@@ -535,6 +535,11 @@ release-commit VERSION:
     set -euo pipefail; \
     release_version="{{ VERSION }}"; \
     case "$release_version" in VERSION=*) release_version="${release_version#VERSION=}";; esac; \
+    branch="$(git rev-parse --abbrev-ref HEAD)"; \
+    if [ "$branch" != "master" ]; then \
+      echo "error: release commits must be created from master (currently on $branch)"; \
+      exit 1; \
+    fi; \
     if [ -n "$(git status --porcelain)" ]; then \
       echo "error: git working tree is dirty"; \
       git status --short; \
