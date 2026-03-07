@@ -1,15 +1,6 @@
 import SwiftUI
 import UIKit
 
-struct MessageCollectionScrollRequest: Equatable {
-    enum Action: Equatable {
-        case scrollToBottom(animated: Bool)
-    }
-
-    let id: Int
-    let action: Action
-}
-
 /// A UICollectionView-based message transcript for chat with an accessory-backed composer.
 struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresentable {
     struct ContentState: Equatable {
@@ -36,7 +27,6 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
 
     @Binding var followsBottom: Bool
     var activeReactionMessageId: String?
-    var scrollRequest: MessageCollectionScrollRequest?
 
     private var contentState: ContentState {
         ContentState(chat: chat, activeReactionMessageId: activeReactionMessageId)
@@ -62,8 +52,14 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
         collectionView.onBoundsSizeChange = { [weak coordinator = context.coordinator] _ in
             coordinator?.handleViewportGeometryChange()
         }
+        collectionView.onContentSizeChange = { [weak coordinator = context.coordinator] _ in
+            coordinator?.handleContentSizeChange()
+        }
         viewController.onViewportGeometryChange = { [weak coordinator = context.coordinator] in
             coordinator?.handleViewportGeometryChange()
+        }
+        viewController.onWillDisappear = { [weak coordinator = context.coordinator] in
+            coordinator?.persistCurrentScrollPosition()
         }
         viewController.onJumpToBottomTap = { [weak coordinator = context.coordinator] in
             coordinator?.handleJumpButtonTap()
@@ -97,11 +93,12 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
         context.coordinator.dataSource = dataSource
 
         let renderedRows = buildRenderedRows()
-        context.coordinator.applyRows(renderedRows, animated: false)
         viewController.updateAccessory(rootView: accessoryContent, keepVisible: !isInputFocused)
         viewController.setJumpButtonVisible(!followsBottom, animated: false)
         context.coordinator.applyViewportInsetsIfNeeded()
-        context.coordinator.scrollToBottom(animated: false)
+        context.coordinator.applyRows(renderedRows, animated: false) {
+            context.coordinator.markInitialRowsApplied()
+        }
 
         return viewController
     }
@@ -134,14 +131,8 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
 
         let viewportChanged = coordinator.applyViewportInsetsIfNeeded()
 
-        let pendingScrollRequest = scrollRequest.flatMap { request in
-            coordinator.consumeScrollRequestIfNeeded(request)
-        }
-
         let completion = {
-            if let pendingScrollRequest {
-                coordinator.handle(scrollRequest: pendingScrollRequest)
-            } else if wasNearBottom {
+            if wasNearBottom {
                 let animateToBottom = updateKind == .tailMutation
                 coordinator.scrollToBottom(animated: animateToBottom)
             } else if let anchor {
@@ -154,13 +145,20 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
             let didApplyVisibleRefresh = contentChanged
                 ? coordinator.reconfigureVisibleRows(with: newRows, completion: completion)
                 : false
-            if !didApplyVisibleRefresh && (viewportChanged || pendingScrollRequest != nil) {
+            if !didApplyVisibleRefresh && viewportChanged {
                 completion()
             }
         case .tailMutation, .structural:
             let animateDifferences = wasNearBottom && updateKind == .tailMutation
             coordinator.applyRows(newRows, animated: animateDifferences, completion: completion)
         }
+    }
+
+    static func dismantleUIViewController(
+        _ viewController: MessageCollectionHostController<AccessoryContent>,
+        coordinator: Coordinator
+    ) {
+        coordinator.persistCurrentScrollPosition()
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -192,12 +190,16 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
         weak var viewController: MessageCollectionHostController<AccessoryContent>?
         private var requestedOldestId: String?
         private var lastAppliedEffectiveInset: UIEdgeInsets?
-        private var lastHandledScrollRequestID: Int?
         var lastContentState: ContentState?
         var pendingViewportAnchor: ScrollAnchor?
+        private var pendingInitialScrollPosition: SavedChatTranscriptPosition?
+        private var hasAppliedInitialRows = false
+        private var isHoldingInitialBottomPin = false
 
         init(parent: MessageCollectionList) {
             self.parent = parent
+            self.pendingInitialScrollPosition =
+                ChatTranscriptScrollPositionStore.shared.position(for: parent.chat.chatId) ?? .bottom
         }
 
         func applyRows(_ rows: [RenderedRow], animated: Bool, completion: (() -> Void)? = nil) {
@@ -237,7 +239,8 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
                 MessageCollectionLayout.bottomContentOffset(
                     contentHeight: collectionView.contentSize.height,
                     boundsHeight: collectionView.bounds.height,
-                    adjustedInsets: collectionView.adjustedContentInset
+                    topAdjustedInset: collectionView.adjustedContentInset.top,
+                    bottomInset: collectionView.contentInset.bottom
                 ),
                 animated: animated
             )
@@ -248,20 +251,8 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
             applyEffectiveInsetsIfNeeded()
         }
 
-        func consumeScrollRequestIfNeeded(_ request: MessageCollectionScrollRequest) -> MessageCollectionScrollRequest? {
-            guard request.id != lastHandledScrollRequestID else { return nil }
-            lastHandledScrollRequestID = request.id
-            return request
-        }
-
-        func handle(scrollRequest: MessageCollectionScrollRequest) {
-            switch scrollRequest.action {
-            case .scrollToBottom(let animated):
-                scrollToBottom(animated: animated)
-            }
-        }
-
         func handleJumpButtonTap() {
+            isHoldingInitialBottomPin = false
             DispatchQueue.main.async {
                 self.parent.followsBottom = true
             }
@@ -272,13 +263,56 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
         func handleViewportGeometryChange() {
             let wasNearBottom = isNearBottom()
             _ = applyEffectiveInsetsIfNeeded()
+
+            if let pendingInitialScrollPosition {
+                guard hasAppliedInitialRows,
+                      let viewController,
+                      viewController.isViewportReadyForInitialBottomPin
+                else { return }
+                self.pendingInitialScrollPosition = nil
+                applyInitialScrollPosition(pendingInitialScrollPosition)
+                return
+            }
+
             if let anchor = pendingViewportAnchor {
                 pendingViewportAnchor = nil
                 restore(anchor: anchor)
                 return
             }
-            guard wasNearBottom else { return }
+            guard isHoldingInitialBottomPin || wasNearBottom else { return }
             scrollToBottom(animated: false)
+        }
+
+        func handleContentSizeChange() {
+            _ = applyEffectiveInsetsIfNeeded()
+
+            if pendingInitialScrollPosition != nil {
+                handleViewportGeometryChange()
+                return
+            }
+
+            guard isHoldingInitialBottomPin || parent.followsBottom || isNearBottom() else { return }
+            scrollToBottom(animated: false)
+        }
+
+        func markInitialRowsApplied() {
+            hasAppliedInitialRows = true
+            handleViewportGeometryChange()
+        }
+
+        func persistCurrentScrollPosition() {
+            guard collectionView != nil else { return }
+
+            let position: SavedChatTranscriptPosition
+            if isNearBottom() {
+                position = .bottom
+            } else if let anchor = captureTopAnchor() {
+                position = .anchor(anchor)
+            } else {
+                return
+            }
+
+            ChatTranscriptScrollPositionStore.shared.set(position, for: parent.chat.chatId)
         }
 
         func captureTopAnchor() -> ScrollAnchor? {
@@ -295,29 +329,31 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
             )
         }
 
-        func restore(anchor: ScrollAnchor) {
+        @discardableResult
+        func restore(anchor: ScrollAnchor) -> Bool {
             guard let collectionView,
                   let dataSource,
                   let indexPath = dataSource.indexPath(for: anchor.itemID)
-            else { return }
+            else { return false }
 
             applyEffectiveInsetsIfNeeded()
             collectionView.layoutIfNeeded()
             collectionView.scrollToItem(at: indexPath, at: .top, animated: false)
             collectionView.layoutIfNeeded()
 
-            guard let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
+            guard let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return false }
 
             let minOffsetY = -collectionView.adjustedContentInset.top
             let maxOffsetY = max(
                 minOffsetY,
-                collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+                collectionView.contentSize.height - collectionView.bounds.height + collectionView.contentInset.bottom
             )
             let targetY = min(
                 max(attributes.frame.minY - anchor.distanceFromContentOffset, minOffsetY),
                 maxOffsetY
             )
             collectionView.setContentOffset(CGPoint(x: 0, y: targetY), animated: false)
+            return true
         }
 
         func collectionView(
@@ -336,12 +372,20 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             let nearBottom = isNearBottom()
+            if isHoldingInitialBottomPin {
+                viewController?.setJumpButtonVisible(false, animated: true)
+                return
+            }
             viewController?.setJumpButtonVisible(!nearBottom, animated: true)
             if nearBottom != parent.followsBottom {
                 DispatchQueue.main.async {
                     self.parent.followsBottom = nearBottom
                 }
             }
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            isHoldingInitialBottomPin = false
         }
 
         @ViewBuilder
@@ -413,13 +457,37 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
                 .compactMap { dataSource.itemIdentifier(for: $0) }
         }
 
+        private func applyInitialScrollPosition(_ position: SavedChatTranscriptPosition) {
+            switch position {
+            case .bottom:
+                isHoldingInitialBottomPin = true
+                DispatchQueue.main.async {
+                    self.parent.followsBottom = true
+                }
+                viewController?.setJumpButtonVisible(false, animated: false)
+                scrollToBottom(animated: false)
+
+            case .anchor(let anchor):
+                isHoldingInitialBottomPin = false
+                let restored = restore(anchor: anchor)
+                DispatchQueue.main.async {
+                    self.parent.followsBottom = !restored
+                }
+                viewController?.setJumpButtonVisible(restored, animated: false)
+                if !restored {
+                    scrollToBottom(animated: false)
+                }
+            }
+        }
+
         func isNearBottom() -> Bool {
             guard let collectionView else { return parent.followsBottom }
             return MessageCollectionLayout.isNearBottom(
                 contentOffsetY: collectionView.contentOffset.y,
                 boundsHeight: collectionView.bounds.height,
                 contentHeight: collectionView.contentSize.height,
-                adjustedInsets: collectionView.adjustedContentInset
+                topAdjustedInset: collectionView.adjustedContentInset.top,
+                bottomInset: collectionView.contentInset.bottom
             )
         }
 
@@ -428,9 +496,12 @@ struct MessageCollectionList<AccessoryContent: View>: UIViewControllerRepresenta
             guard let collectionView, let viewController else { return false }
             collectionView.layoutIfNeeded()
 
+            let topChromeInset = max(0, collectionView.adjustedContentInset.top - collectionView.contentInset.top)
+
             let effectiveInset = MessageCollectionLayout.effectiveContentInset(
                 boundsHeight: collectionView.bounds.height,
                 contentHeight: collectionView.contentSize.height,
+                topChromeInset: topChromeInset,
                 bottomInset: viewController.bottomViewportInset
             )
             guard effectiveInset != lastAppliedEffectiveInset else { return false }
@@ -455,6 +526,7 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
     private let jumpButtonChromeView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let jumpButton = UIButton(type: .system)
     var onViewportGeometryChange: (() -> Void)?
+    var onWillDisappear: (() -> Void)?
     var onJumpToBottomTap: (() -> Void)?
     private var lastReportedBottomViewportInset: CGFloat = 0
     private var jumpButtonBottomConstraint: NSLayoutConstraint?
@@ -463,6 +535,11 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
     var bottomViewportInset: CGFloat {
         max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
     }
+
+    var isViewportReadyForInitialBottomPin: Bool {
+        isViewLoaded && view.window != nil && collectionView.bounds.height > 0 && bottomViewportInset > 0
+    }
+
     init(layout: UICollectionViewLayout, accessoryContent: AccessoryContent) {
         self.collectionView = BoundsAwareCollectionView(frame: .zero, collectionViewLayout: layout)
         self.accessoryContainerView = InputAccessoryHostingView(rootView: accessoryContent)
@@ -507,10 +584,14 @@ final class MessageCollectionHostController<AccessoryContent: View>: UIViewContr
         if !isFirstResponder {
             becomeFirstResponder()
         }
+        DispatchQueue.main.async { [weak self] in
+            self?.onViewportGeometryChange?()
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        onWillDisappear?()
         if isFirstResponder {
             resignFirstResponder()
         }
@@ -712,10 +793,16 @@ final class InputAccessoryHostingView<AccessoryContent: View>: UIInputView {
 
 fileprivate final class BoundsAwareCollectionView: UICollectionView {
     var onBoundsSizeChange: ((CGSize) -> Void)?
+    var onContentSizeChange: ((CGSize) -> Void)?
     private var lastReportedSize: CGSize = .zero
+    private var lastReportedContentSize: CGSize = .zero
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        if contentSize != lastReportedContentSize {
+            lastReportedContentSize = contentSize
+            onContentSizeChange?(contentSize)
+        }
         guard bounds.size != lastReportedSize else { return }
         lastReportedSize = bounds.size
         onBoundsSizeChange?(bounds.size)
@@ -725,6 +812,26 @@ fileprivate final class BoundsAwareCollectionView: UICollectionView {
 struct ScrollAnchor {
     let itemID: String
     let distanceFromContentOffset: CGFloat
+}
+
+fileprivate enum SavedChatTranscriptPosition {
+    case bottom
+    case anchor(ScrollAnchor)
+}
+
+@MainActor
+fileprivate final class ChatTranscriptScrollPositionStore {
+    static let shared = ChatTranscriptScrollPositionStore()
+
+    private var positions: [String: SavedChatTranscriptPosition] = [:]
+
+    func position(for chatId: String) -> SavedChatTranscriptPosition? {
+        positions[chatId]
+    }
+
+    func set(_ position: SavedChatTranscriptPosition, for chatId: String) {
+        positions[chatId] = position
+    }
 }
 
 enum RenderedRow: Identifiable {

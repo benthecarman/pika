@@ -43,7 +43,6 @@ struct ChatView: View {
     @State private var fullscreenImageAttachment: ChatMediaAttachment?
     @State private var fullscreenImageAttachments: [ChatMediaAttachment] = []
     @State private var showPollComposer = false
-    @State private var scrollRequest: MessageCollectionScrollRequest?
     @State private var voiceRecorder: VoiceRecorder
     @State private var showMicPermissionDenied = false
     @State private var isInputFocused = false
@@ -355,12 +354,8 @@ struct ChatView: View {
                 }
             },
             followsBottom: $followsBottom,
-            activeReactionMessageId: activeReactionMessageId,
-            scrollRequest: scrollRequest
+            activeReactionMessageId: activeReactionMessageId
         )
-        .onChangeCompat(of: chat.chatId) {
-            requestScrollToBottom(animated: false)
-        }
     }
 
     private var loadingView: some View {
@@ -391,14 +386,6 @@ struct ChatView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
-    }
-
-    private func requestScrollToBottom(animated: Bool) {
-        followsBottom = true
-        scrollRequest = MessageCollectionScrollRequest(
-            id: (scrollRequest?.id ?? 0) + 1,
-            action: .scrollToBottom(animated: animated)
-        )
     }
 
     private func chatTitle(_ chat: ChatViewState) -> String {

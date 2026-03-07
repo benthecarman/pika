@@ -17,10 +17,11 @@ enum MessageCollectionLayout {
     static func effectiveContentInset(
         boundsHeight: CGFloat,
         contentHeight: CGFloat,
+        topChromeInset: CGFloat,
         bottomInset: CGFloat
     ) -> UIEdgeInsets {
         let effectiveBottomInset = bottomInset + bottomContentSpacing
-        let availableHeight = max(0, boundsHeight - effectiveBottomInset)
+        let availableHeight = max(0, boundsHeight - topChromeInset - effectiveBottomInset)
         let extraTopInset = max(0, availableHeight - contentHeight)
         return UIEdgeInsets(
             top: extraTopInset,
@@ -42,20 +43,24 @@ enum MessageCollectionLayout {
         contentOffsetY: CGFloat,
         boundsHeight: CGFloat,
         contentHeight: CGFloat,
-        adjustedInsets: UIEdgeInsets,
+        topAdjustedInset: CGFloat,
+        bottomInset: CGFloat,
         tolerance: CGFloat = 50
     ) -> Bool {
-        let visibleBottom = contentOffsetY + boundsHeight - adjustedInsets.bottom
+        let minOffsetY = -topAdjustedInset
+        let effectiveOffsetY = max(contentOffsetY, minOffsetY)
+        let visibleBottom = effectiveOffsetY + boundsHeight - bottomInset
         return visibleBottom >= contentHeight - tolerance
     }
 
     static func bottomContentOffset(
         contentHeight: CGFloat,
         boundsHeight: CGFloat,
-        adjustedInsets: UIEdgeInsets
+        topAdjustedInset: CGFloat,
+        bottomInset: CGFloat
     ) -> CGPoint {
-        let minOffsetY = -adjustedInsets.top
-        let maxOffsetY = max(minOffsetY, contentHeight - boundsHeight + adjustedInsets.bottom)
+        let minOffsetY = -topAdjustedInset
+        let maxOffsetY = max(minOffsetY, contentHeight - boundsHeight + bottomInset)
         return CGPoint(x: 0, y: maxOffsetY)
     }
 }

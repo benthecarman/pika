@@ -14,22 +14,22 @@ final class MessageCollectionLayoutTests: XCTestCase {
         let inset = MessageCollectionLayout.effectiveContentInset(
             boundsHeight: 600,
             contentHeight: 180,
+            topChromeInset: 44,
             bottomInset: 20
         )
 
-        XCTAssertEqual(inset.top, 390)
+        XCTAssertEqual(inset.top, 346)
         XCTAssertEqual(inset.bottom, 30)
     }
 
     func testNearBottomUsesVisibleViewportBottom() {
-        let insets = UIEdgeInsets(top: 30, left: 0, bottom: 106, right: 0)
-
         XCTAssertTrue(
             MessageCollectionLayout.isNearBottom(
                 contentOffsetY: 900,
                 boundsHeight: 500,
                 contentHeight: 1300,
-                adjustedInsets: insets
+                topAdjustedInset: 30,
+                bottomInset: 106
             )
         )
         XCTAssertFalse(
@@ -37,18 +37,20 @@ final class MessageCollectionLayoutTests: XCTestCase {
                 contentOffsetY: 700,
                 boundsHeight: 500,
                 contentHeight: 1300,
-                adjustedInsets: insets
+                topAdjustedInset: 30,
+                bottomInset: 106
             )
         )
     }
 
-    func testBottomContentOffsetRespectsInsets() {
+    func testBottomContentOffsetUsesHostOwnedBottomInset() {
         let offset = MessageCollectionLayout.bottomContentOffset(
             contentHeight: 1300,
             boundsHeight: 500,
-            adjustedInsets: UIEdgeInsets(top: 30, left: 0, bottom: 106, right: 0)
+            topAdjustedInset: 30,
+            bottomInset: 72
         )
-        XCTAssertEqual(offset, CGPoint(x: 0, y: 906))
+        XCTAssertEqual(offset, CGPoint(x: 0, y: 872))
     }
 
     func testUpdateClassificationUsesTailMutationForAppendAndTrim() {
