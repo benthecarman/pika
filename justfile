@@ -244,7 +244,7 @@ pre-merge-pika: fmt clippy
     actionlint
     npx --yes @justinmoon/agent-tools check-docs
     npx --yes @justinmoon/agent-tools check-justfile
-    @echo "pre-merge-pika complete"
+    echo "pre-merge-pika complete"
 
 # CI-safe pre-merge for the notification server lane.
 pre-merge-notifications:
