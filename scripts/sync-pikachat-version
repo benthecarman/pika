@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CARGO_TOML="$ROOT/cli/Cargo.toml"
+PACKAGE_JSON="$ROOT/pikachat-openclaw/openclaw/extensions/pikachat-openclaw/package.json"
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/sync-pikachat-version [<version>]
+
+Syncs the pikachat Rust binary and OpenClaw extension versions.
+
+- With no argument, reads the version from the repo-root VERSION file.
+- With an explicit argument, uses that version instead.
+
+Updates:
+- cli/Cargo.toml
+- pikachat-openclaw/openclaw/extensions/pikachat-openclaw/package.json
+- Cargo.lock (via `cargo check -p pikachat`)
+EOF
+}
+
+if [ "$#" -gt 1 ]; then
+  usage >&2
+  exit 2
+fi
+
+if [ "$#" -eq 1 ]; then
+  VERSION="$1"
+else
+  VERSION="$("$ROOT/scripts/version-read" --name)"
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "error: version must be x.y.z (got: $VERSION)" >&2
+  exit 1
+fi
+
+sed "s/^version = \".*\"/version = \"${VERSION}\"/" "$CARGO_TOML" > "$CARGO_TOML.tmp"
+mv "$CARGO_TOML.tmp" "$CARGO_TOML"
+
+node - "$PACKAGE_JSON" "$VERSION" <<'EOF'
+const fs = require("fs");
+
+const [pkgPath, version] = process.argv.slice(2);
+const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+pkg.version = version;
+fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+EOF
+
+cd "$ROOT"
+cargo check -p pikachat --quiet
+
+echo "ok: synced pikachat artifacts to version $VERSION"

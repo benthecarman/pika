@@ -523,6 +523,13 @@ android-ui-e2e-local:
 desktop-e2e-local:
     cargo test -p pikahut --test integration_deterministic ui_e2e_local_desktop -- --ignored --nocapture
 
+# Sync the shared release version across app + pikachat/OpenClaw manifests.
+release-bump VERSION:
+    set -euo pipefail; \
+    release_version="{{ VERSION }}"; \
+    case "$release_version" in VERSION=*) release_version="${release_version#VERSION=}";; esac; \
+    ./scripts/set-release-version "$release_version"
+
 # Create + push version tag (pika/vX.Y.Z) after validating VERSION and clean tree.
 release VERSION:
     set -euo pipefail; \
