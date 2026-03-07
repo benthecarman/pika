@@ -805,7 +805,8 @@ struct ChatView: View {
         case .success(let urls):
             guard let url = urls.first else { return }
             let filename = url.lastPathComponent
-            let caption = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let originalDraft = messageText
+            let caption = originalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.global(qos: .userInitiated).async {
                 let didStartAccess = url.startAccessingSecurityScopedResource()
                 defer {
@@ -817,7 +818,7 @@ struct ChatView: View {
                 do {
                     let data = try Data(contentsOf: url)
                     DispatchQueue.main.async {
-                        if !caption.isEmpty {
+                        if !caption.isEmpty, messageText == originalDraft {
                             messageText = ""
                         }
 

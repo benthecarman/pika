@@ -29,7 +29,7 @@ git rebase origin/master
 ```
 If there are conflicts, fix them, `git rebase --continue`, commit, and push.
 
-2. **Choose the smallest validation lane that matches the touched surface:**
+2. **Run every validation lane that matches the touched surface:**
 ```bash
 git diff --name-only origin/master...HEAD
 ```
@@ -47,9 +47,10 @@ git diff --name-only origin/master...HEAD
   ```bash
   just android-assemble
   ```
+- **Mixed scope**: if multiple surfaces are touched, run each matching lane before entering the main loop.
 - **Docs/skills/workflow-only scope**: no product build is required unless the changed workflow itself needs validation.
 
-3. **Fix any issues** found in the selected validation lane. Commit and force-push the rebased branch:
+3. **Fix any issues** found in the required validation lane(s). Commit and force-push the rebased branch:
 ```bash
 git push --force-with-lease
 ```
@@ -168,7 +169,10 @@ For visual verification of UI changes, record per-platform E2E test videos using
 **Exit successfully when:**
 - All CI checks pass AND no unaddressed review comments remain
 - Required validation lane(s) pass
-- PR is merged or closed
+- PR is merged
+
+**Exit without further action when:**
+- PR is closed without merge
 
 **Exit with escalation to user when:**
 - Issue requires human judgment (architecture decisions, breaking changes)
