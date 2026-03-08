@@ -3,7 +3,9 @@ use std::future::Future;
 
 use anyhow::{Context, Result};
 use mdk_core::prelude::NostrGroupConfigData;
-use nostr_sdk::prelude::{Event, EventBuilder, EventId, Keys, Kind, PublicKey, Tag, UnsignedEvent};
+use nostr_sdk::prelude::{
+    Event, EventBuilder, EventId, Keys, Kind, NostrSigner, PublicKey, Tag, UnsignedEvent,
+};
 
 use crate::{PikaMdk, ingest_group_backlog};
 
@@ -175,7 +177,7 @@ pub async fn create_group_and_publish_welcomes<F, Fut>(
     config: NostrGroupConfigData,
     recipients: &[PublicKey],
     welcome_tags: Vec<Tag>,
-    mut publish_giftwrap: F,
+    publish_giftwrap: F,
 ) -> Result<CreatedGroup>
 where
     F: FnMut(PublicKey, Event) -> Fut,
@@ -185,11 +187,38 @@ where
         .create_group(&keys.public_key(), peer_key_packages, config)
         .context("create group")?;
 
-    if recipients.len() != result.welcome_rumors.len() {
+    let published_welcomes = publish_welcome_rumors(
+        keys,
+        &result.welcome_rumors,
+        recipients,
+        welcome_tags,
+        publish_giftwrap,
+    )
+    .await?;
+
+    Ok(CreatedGroup {
+        group: result.group,
+        published_welcomes,
+    })
+}
+
+pub async fn publish_welcome_rumors<T, F, Fut>(
+    signer: &T,
+    welcome_rumors: &[UnsignedEvent],
+    recipients: &[PublicKey],
+    welcome_tags: Vec<Tag>,
+    mut publish_giftwrap: F,
+) -> Result<Vec<PublishedWelcome>>
+where
+    T: NostrSigner,
+    F: FnMut(PublicKey, Event) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    if recipients.len() != welcome_rumors.len() {
         anyhow::bail!(
             "recipient/welcome mismatch: {} recipients for {} welcome rumors",
             recipients.len(),
-            result.welcome_rumors.len()
+            welcome_rumors.len()
         );
     }
 
@@ -197,11 +226,11 @@ where
     for (receiver, mut rumor) in recipients
         .iter()
         .copied()
-        .zip(result.welcome_rumors.iter().cloned())
+        .zip(welcome_rumors.iter().cloned())
     {
         let welcome_event_id = rumor.id();
         let giftwrap =
-            EventBuilder::gift_wrap(keys, &receiver, rumor.clone(), welcome_tags.clone())
+            EventBuilder::gift_wrap(signer, &receiver, rumor.clone(), welcome_tags.clone())
                 .await
                 .context("build welcome giftwrap")?;
         publish_giftwrap(receiver, giftwrap.clone())
@@ -215,10 +244,7 @@ where
         });
     }
 
-    Ok(CreatedGroup {
-        group: result.group,
-        published_welcomes,
-    })
+    Ok(published_welcomes)
 }
 
 #[cfg(test)]
@@ -546,7 +572,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_group_and_publish_welcomes_pairs_each_recipient_with_one_welcome() {
+    async fn publish_welcome_rumors_pairs_each_recipient_with_one_welcome() {
         let inviter_dir = tempfile::tempdir().expect("inviter tempdir");
         let bob_dir = tempfile::tempdir().expect("bob tempdir");
         let charlie_dir = tempfile::tempdir().expect("charlie tempdir");
@@ -576,11 +602,12 @@ mod tests {
         let published =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::<(PublicKey, Event)>::new()));
         let published_capture = std::sync::Arc::clone(&published);
-        let created = create_group_and_publish_welcomes(
+        let group_result = inviter_mdk
+            .create_group(&inviter_keys.public_key(), vec![bob_kp, charlie_kp], config)
+            .expect("create group");
+        let published_welcomes = publish_welcome_rumors(
             &inviter_keys,
-            &inviter_mdk,
-            vec![bob_kp, charlie_kp],
-            config,
+            &group_result.welcome_rumors,
             &[bob_keys.public_key(), charlie_keys.public_key()],
             vec![],
             move |receiver, giftwrap| {
@@ -595,9 +622,9 @@ mod tests {
             },
         )
         .await
-        .expect("create group and publish welcomes");
+        .expect("publish welcome rumors");
 
-        assert_eq!(created.published_welcomes.len(), 2);
+        assert_eq!(published_welcomes.len(), 2);
         let published = published.lock().expect("published lock").clone();
         assert_eq!(published.len(), 2);
 
@@ -628,7 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_group_and_publish_welcomes_rejects_recipient_count_mismatch() {
+    async fn publish_welcome_rumors_rejects_recipient_count_mismatch() {
         let inviter_dir = tempfile::tempdir().expect("inviter tempdir");
         let invitee_dir = tempfile::tempdir().expect("invitee tempdir");
         let inviter_keys = Keys::generate();
@@ -647,11 +674,12 @@ mod tests {
             vec![inviter_keys.public_key(), invitee_keys.public_key()],
         );
 
-        let err = create_group_and_publish_welcomes(
+        let group_result = inviter_mdk
+            .create_group(&inviter_keys.public_key(), vec![invitee_kp], config)
+            .expect("create group");
+        let err = publish_welcome_rumors(
             &inviter_keys,
-            &inviter_mdk,
-            vec![invitee_kp],
-            config,
+            &group_result.welcome_rumors,
             &[],
             vec![],
             |_receiver, _giftwrap| async move { Ok(()) },
