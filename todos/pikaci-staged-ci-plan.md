@@ -412,7 +412,33 @@ Phase 6 helper-contract slice notes:
 - The opt-in staged Linux Rust run mode still uses the same request schema and same persisted run-state fields.
 - What this slice proves: the staged subprocess mode can ride a narrower helper contract without changing the Nix-backed prepared-output request format.
 - What is still missing: the helper is still local-only, still same-host, and still has no remote transport, remote invocation protocol, or off-host result handling.
-- Next recommended slice: decide whether the helper contract now has enough shape to be exercised out-of-process in a more production-like way, or whether one more small helper-specific status/result protocol is needed before any off-host prototype.
+- Next recommended slice: add one tiny helper-specific status/result contract so the helper boundary is less implicit than exit code plus logs.
+
+Phase 6 helper-result slice notes:
+
+- This next follow-up slice is now complete and landed.
+- `pikaci-fulfill-prepared-output` now has a tiny machine-readable result contract:
+  - the helper can emit and persist a fulfillment result record for each request,
+  - the record captures request path, realized path, fulfilled exposure count, success/failure, and optional error text,
+  - and the staged subprocess mode records where that result lives.
+- The request JSON contract stays unchanged; only the helper result/report side is new.
+- What this slice proves: the same opt-in staged Linux Rust helper path can expose a future off-host caller to a clearer lifecycle than “helper exited 0 and logs looked okay.”
+- What is still missing: no remote transport, no helper distribution/invocation off-host, and no broader request/result orchestration beyond one local helper process.
+- Next recommended slice: tighten the helper-result path so the machine-readable result is authoritative and failed helper results remain linked from persisted run state.
+
+Phase 6 helper-result hardening notes:
+
+- This next follow-up slice is now complete and landed.
+- The helper result contract is now authoritative for the subprocess fulfillment path:
+  - `pikaci` validates the helper result status, not just the subprocess exit code,
+  - validates the helper-reported request/result details against the request it wrote,
+  - and a helper that exits `0` while reporting `failed` is treated as a prepare failure.
+- Failed helper results are now still linked from persisted prepared-output state:
+  - `prepared-outputs.json` keeps the request/result paths and requested exposures even when fulfillment aborts before any live exposure is realized.
+- Successful helper results now also drive persisted realized exposures instead of replaying the planned handoff shape blindly.
+- What this slice proves: the helper result contract is now useful as a real status boundary instead of only a debugging aid.
+- What is still missing: this is still same-host helper orchestration with no off-host invocation, transport, or remote result collection.
+- Next recommended slice: decide whether the current request/result pair is now sufficient for a first off-host helper prototype, or add one final tiny helper invocation wrapper only if that boundary still feels too implicit.
 
 ## Deferred Until Proven Necessary
 
@@ -451,5 +477,5 @@ We have at least one important Linux Rust lane where:
 - Phase 3 is complete and landed.
 - Phase 4 is complete and landed in its narrowed form.
 - Phase 5 is complete and landed as a decision/update slice.
-- Phase 6 is complete in its first, second, third, fourth, fifth, sixth, and seventh narrow remote-prep forms.
-- Current recommended slice is one narrow decision/implementation step for whether the dedicated prepared-output fulfillment helper now needs a tiny helper-specific result/status contract before any off-host prototype, while keeping Rust execute inputs Nix-backed.
+- Phase 6 is complete in its first, second, third, fourth, fifth, sixth, seventh, eighth, and ninth narrow remote-prep forms.
+- Current recommended slice is one narrow decision/implementation step for whether the current helper request/result pair is sufficient for a first off-host helper prototype, or whether one final tiny invocation wrapper is still needed before that, while keeping Rust execute inputs Nix-backed.
